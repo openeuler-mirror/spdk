@@ -9,7 +9,7 @@ License: BSD
 URL: http://spdk.io
 Source0: https://github.com/spdk/spdk/archive/v20.01.1.tar.gz
 
-%define package_version %{epoch}:%{version}-%{release}
+%define package_version %{version}-%{release}
 
 %define install_datadir %{buildroot}/%{_datadir}/%{name}
 %define install_sbindir %{buildroot}/%{_sbindir}
@@ -36,6 +36,7 @@ BuildRequires: doxygen mscgen graphviz
 %global config arm64-armv8a-linux-gcc
 %else
 %global config x86_64-default-linuxapp-gcc
+%endif
 
 # Install dependencies
 Requires: dpdk >= 17.11, numactl-libs, openssl-libs
