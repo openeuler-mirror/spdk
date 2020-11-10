@@ -35,7 +35,7 @@ BuildRequires: doxygen mscgen graphviz
 %ifarch aarch64
 %global config arm64-armv8a-linux-gcc
 %else
-%global config x86_64-default-linuxapp-gcc
+%global config x86_64-native-linux-gcc
 %endif
 
 # Install dependencies
