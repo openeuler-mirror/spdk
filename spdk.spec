@@ -7,7 +7,7 @@ Release: 1
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD
 URL: http://spdk.io
-Source0: https://github.com/spdk/spdk/archive/v20.01.1.tar.gz
+Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
 
 %define package_version %{version}-%{release}
 
