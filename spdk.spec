@@ -3,9 +3,9 @@
 
 Name: spdk
 Version: 20.01.1
-Release: 1
+Release: 2
 Summary: Set of libraries and utilities for high performance user-mode storage
-License: BSD
+License: BSD and MIT
 URL: http://spdk.io
 Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
 
@@ -167,6 +167,8 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Nov 26 2020 Shihao Sun <sunshihao@huawei.com> - 20.01.1-2
+- modify license
 * Sat Nov 7 2020 Feilong Lin <linfeilong@huawei.com> - 20.01.1-1
 - Support aarch64
 * Tue Sep 18 2018 Pawel Wodkowski <pawelx.wodkowski@intel.com> - 0:18.07-3
