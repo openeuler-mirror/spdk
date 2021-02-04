@@ -1,0 +1,70 @@
+From ca3cf79c6a8037166f28c70f3c4f85d6573abccd Mon Sep 17 00:00:00 2001
+From: sunshihao <sunshihao@huawei.com>
+Date: Thu, 4 Feb 2021 15:42:44 +0800
+Subject: [PATCH] spdk: fix the deference between dpdk 19.11 and dpdk 20.11
+
+In dpdk 19.11, we use the old kdrv definiton, the new kdrv name was added in
+dpdk-20.11, this patch is to solve this problem.
+
+Signed-off-by: sunshihao <sunshihao@huawei.com>
+---
+ lib/env_dpdk/memory.c        | 12 ++++++++++++
+ lib/vhost/rte_vhost_compat.c |  2 +-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/lib/env_dpdk/memory.c b/lib/env_dpdk/memory.c
+index f49dcf4..c923483 100644
+--- a/lib/env_dpdk/memory.c
++++ b/lib/env_dpdk/memory.c
+@@ -1238,7 +1238,11 @@ vtophys_iommu_device_event(const char *device_name,
+ 		RTE_DEV_FOREACH(dev, "bus=pci", &dev_iter) {
+ 			if (strcmp(dev->name, device_name) == 0) {
+ 				struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev);
++#if RTE_VERSION < RTE_VERSION_NUM(20, 11, 0, 0)
++				if (pci_dev->kdrv == RTE_KDRV_VFIO) {
++#else
+ 				if (pci_dev->kdrv == RTE_PCI_KDRV_VFIO) {
++#endif
+ 					/* This is a new PCI device using vfio */
+ 					g_vfio.device_ref++;
+ 				}
+@@ -1267,7 +1271,11 @@ vtophys_iommu_device_event(const char *device_name,
+ 		RTE_DEV_FOREACH(dev, "bus=pci", &dev_iter) {
+ 			if (strcmp(dev->name, device_name) == 0) {
+ 				struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev);
++#if RTE_VERSION < RTE_VERSION_NUM(20, 11, 0, 0)
++				if (pci_dev->kdrv == RTE_KDRV_VFIO) {
++#else
+ 				if (pci_dev->kdrv == RTE_PCI_KDRV_VFIO) {
++#endif
+ 					/* This is a PCI device using vfio */
+ 					g_vfio.device_ref--;
+ 				}
+@@ -1362,7 +1370,11 @@ vtophys_iommu_init(void)
+ 	RTE_DEV_FOREACH(dev, "bus=pci", &dev_iter) {
+ 		struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev);
+ 
++#if RTE_VERSION < RTE_VERSION_NUM(20, 11, 0, 0)
++		if (pci_dev->kdrv == RTE_KDRV_VFIO) {
++#else
+ 		if (pci_dev->kdrv == RTE_PCI_KDRV_VFIO) {
++#endif
+ 			/* This is a PCI device using vfio */
+ 			g_vfio.device_ref++;
+ 		}
+diff --git a/lib/vhost/rte_vhost_compat.c b/lib/vhost/rte_vhost_compat.c
+index 85cce3d..e1747cc 100644
+--- a/lib/vhost/rte_vhost_compat.c
++++ b/lib/vhost/rte_vhost_compat.c
+@@ -331,7 +331,7 @@ vhost_register_unix_socket(const char *path, const char *ctrl_name,
+ 		}
+ 	}
+ 
+-	if (rte_vhost_driver_register(path, RTE_VHOST_USER_ASYNC_COPY) != 0) {
++	if (rte_vhost_driver_register(path, 0) != 0) {
+ 		SPDK_ERRLOG("Could not register controller %s with vhost library\n", ctrl_name);
+ 		SPDK_ERRLOG("Check if domain socket %s already exists\n", path);
+ 		return -EIO;
+-- 
+1.8.3.1
+

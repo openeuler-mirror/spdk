@@ -2,12 +2,13 @@
 %bcond_with doc
 
 Name: spdk
-Version: 20.01.1
-Release: 2
+Version: 21.01
+Release: 1
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
 Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
+Patch0: 0001-spdk-fix-the-deference-between-dpdk-19.11-and-dpdk-20.11.patch
 
 %define package_version %{version}-%{release}
 
@@ -25,7 +26,7 @@ Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
 ExclusiveArch: x86_64 aarch64
 
 BuildRequires: gcc gcc-c++ make
-BuildRequires: dpdk-devel, numactl-devel
+BuildRequires: dpdk-devel, numactl-devel, ncurses-devel
 BuildRequires: libiscsi-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires: libibverbs-devel, librdmacm-devel
 %if %{with doc}
@@ -39,7 +40,7 @@ BuildRequires: doxygen mscgen graphviz
 %endif
 
 # Install dependencies
-Requires: dpdk >= 17.11, numactl-libs, openssl-libs
+Requires: dpdk >= 19.11, numactl-libs, openssl-libs
 Requires: libiscsi, libaio, libuuid
 # NVMe over Fabrics
 Requires: librdmacm, librdmacm
@@ -87,18 +88,18 @@ BuildArch: noarch
 
 %prep
 # add -q
-%autosetup -n spdk-%{version}
+%autosetup -n spdk-%{version} -p1
 
 
 %build
 ./configure --prefix=%{_usr} \
 	--disable-tests \
+	--disable-unit-tests \
 	--without-crypto \
 	--with-dpdk=/usr/share/dpdk/%{config} \
 	--without-fio \
 	--with-vhost \
 	--without-pmdk \
-	--without-vpp \
 	--without-rbd \
 	--with-rdma \
 	--with-shared \
@@ -167,6 +168,8 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Feb 4 2021 Shihao Sun <sunshihao@huawei.com> - 21.01-1
+- update spdk to 21.01 LTS version. 
 * Thu Nov 26 2020 Shihao Sun <sunshihao@huawei.com> - 20.01.1-2
 - modify license
 * Sat Nov 7 2020 Feilong Lin <linfeilong@huawei.com> - 20.01.1-1
