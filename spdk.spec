@@ -1,9 +1,10 @@
 # Build documentation package
 %bcond_with doc
+%global __python %{__python3}
 
 Name: spdk
 Version: 21.01
-Release: 2
+Release: 3
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -169,6 +170,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Wed Mar 29 2021 jeffery.Gao <gaojianxing@huawei.com> - 21.01-3
+- set __python use python3 to avoid rpm build failed.
+
 * Wed Mar 10 2021 Shihao Sun <sunshihao@huawei.com> - 21.01-2
 - use --without-isal to avoid build failed in arm.
 
