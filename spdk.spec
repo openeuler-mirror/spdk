@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01
-Release: 1
+Release: 2
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -96,6 +96,7 @@ BuildArch: noarch
 	--disable-tests \
 	--disable-unit-tests \
 	--without-crypto \
+	--without-isal \
 	--with-dpdk=/usr/share/dpdk/%{config} \
 	--without-fio \
 	--with-vhost \
@@ -168,6 +169,8 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Apr 29 2021 Shihao Sun <sunshihao@huawei.com> - 21.01-2
+- use --without-isal to avoid build failed issue in arm
 * Thu Feb 4 2021 Shihao Sun <sunshihao@huawei.com> - 21.01-1
 - update spdk to 21.01 LTS version. 
 * Thu Nov 26 2020 Shihao Sun <sunshihao@huawei.com> - 20.01.1-2
