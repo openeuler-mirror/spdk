@@ -1,0 +1,39 @@
+From 0765bbc3fbfa06a511eaf931468e813dfd787697 Mon Sep 17 00:00:00 2001
+From: Rui Chang <rui.chang@arm.com>
+Date: Tue, 2 Feb 2021 10:18:47 +0800
+Subject: [PATCH 12/15] lib/util: Fix valgrind error reported on ARM platform
+
+Signed-off-by: Rui Chang <rui.chang@arm.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6214 (master)
+
+(cherry picked from commit 1293377629ad9ae95373178c919dcbe7d0fc2a95)
+Change-Id: I244a1b0350b4426666e390781b500de65d250c09
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6391
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Ben Walker <benjamin.walker@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Rui Chang <rui.chang@arm.com>
+---
+ lib/util/fd_group.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/lib/util/fd_group.c b/lib/util/fd_group.c
+index d3f9104..217ca43 100644
+--- a/lib/util/fd_group.c
++++ b/lib/util/fd_group.c
+@@ -85,8 +85,8 @@ int
+ spdk_fd_group_add(struct spdk_fd_group *fgrp,
+ 		  int efd, spdk_fd_fn fn, void *arg)
+ {
+-	struct event_handler *ehdlr;
+-	struct epoll_event epevent;
++	struct event_handler *ehdlr = NULL;
++	struct epoll_event epevent = {0};
+ 	int rc;
+ 
+ 	/* parameter checking */
+-- 
+1.8.3.1
+
