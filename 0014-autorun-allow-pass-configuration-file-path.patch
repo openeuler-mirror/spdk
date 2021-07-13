@@ -1,0 +1,42 @@
+From 7cbc04ea01fd56bac975bf4c1a1634ff7e1a75f1 Mon Sep 17 00:00:00 2001
+From: Pawel Piatek <pawelx.piatek@intel.com>
+Date: Wed, 10 Feb 2021 05:47:39 +0100
+Subject: [PATCH 14/15] autorun: allow pass configuration file path
+
+Allow to pass configuration file as first parameter with
+fallback to previous behaviour where config file is read
+from home directory.
+
+Signed-off-by: Pawel Piatek <pawelx.piatek@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6361 (master)
+
+(cherry picked from commit 23c8f667a22e0a6a79099765bfdf8256497a5028)
+Change-Id: I45972b04fe5fc978bf3b2bede45aae363be3069c
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6545
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Pawel Piatek <pawelx.piatek@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: <dongx.yi@intel.com>
+Reviewed-by: Ben Walker <benjamin.walker@intel.com>
+---
+ autorun.sh | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/autorun.sh b/autorun.sh
+index cdc27a3..c85fdb2 100755
+--- a/autorun.sh
++++ b/autorun.sh
+@@ -4,7 +4,8 @@ set -e
+ 
+ rootdir=$(readlink -f $(dirname $0))
+ 
+-conf=~/autorun-spdk.conf
++default_conf=~/autorun-spdk.conf
++conf=${1:-${default_conf}}
+ 
+ # If the configuration of tests is not provided, no tests will be carried out.
+ if [[ ! -f $conf ]]; then
+-- 
+1.8.3.1
+
