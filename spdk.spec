@@ -4,12 +4,26 @@
 
 Name: spdk
 Version: 21.01
-Release: 3
+Release: 4
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
 Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
-Patch0: 0001-spdk-fix-the-deference-between-dpdk-19.11-and-dpdk-20.11.patch
+Patch1:  0001-lib-env_dpdk-fix-the-enum-rte_kernel_driver-definiti.patch
+Patch2:  0002-env_dpdk-add-rte_ethdev-dependency.patch
+Patch3:  0003-pkg-spdk.spec-Add-ncurses-devel-to-BuildRequires.patch
+Patch4:  0004-lib-vhost-Add-version-check-when-use-RTE_VHOST_USER_.patch
+Patch5:  0005-lib-nvme-Remove-qpair-from-all-lists-before-freeing-.patch
+Patch6:  0006-lib-env_dpdk-add-rte_net-dependency.patch
+Patch7:  0007-pkg-add-python3-requires-in-spdk.spec.patch
+Patch8:  0008-sock-add-enable_quickack-and-enable_placement_id-whe.patch
+Patch9:  0009-bdev-ocssd-Fix-the-bug-that-no-media-event-is-pushed.patch
+Patch10: 0010-lib-iscsi-return-immediately-from-iscsi_parse_params.patch
+Patch11: 0011-nbd-set-io-timeout.patch
+Patch12: 0012-lib-util-Fix-valgrind-error-reported-on-ARM-platform.patch
+Patch13: 0013-lib-vhost-force-cpumask-to-be-subset-of-application-.patch
+Patch14: 0014-autorun-allow-pass-configuration-file-path.patch
+Patch15: 0015-spdk_top-fix-app-crashing-on-tab-selection-with-TAB-.patch
 
 %define package_version %{version}-%{release}
 
@@ -170,6 +184,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Jul 13 2021 Xiaokeng Li <lixiaokeng@huawei.com> - 21.01-4
+- backport bugfix from upstream
+
 * Wed Mar 29 2021 jeffery.Gao <gaojianxing@huawei.com> - 21.01-3
 - set __python use python3 to avoid rpm build failed.
 
