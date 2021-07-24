@@ -1,0 +1,35 @@
+From b4c40bfdf47efc027330a805947db521df8b8959 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 14:53:27 +0800
+Subject: [PATCH 21/28] idxd: fix one memleak problem in
+ spdk_idxd_get_channel()
+
+In spdk_idxd_get_channel(), if chan->batch_base is allocated
+faild, we should free chan before returning NULL.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: Ia652c334aead592429c1171da73d67160879686d
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8301
+Community-CI: Mellanox Build Bot
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ lib/idxd/idxd.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/lib/idxd/idxd.c b/lib/idxd/idxd.c
+index 4f76f09..d2fad12 100644
+--- a/lib/idxd/idxd.c
++++ b/lib/idxd/idxd.c
+@@ -121,6 +121,7 @@ spdk_idxd_get_channel(struct spdk_idxd_device *idxd)
+ 	chan->batch_base = calloc(NUM_BATCHES_PER_CHANNEL, sizeof(struct idxd_batch));
+ 	if (chan->batch_base == NULL) {
+ 		SPDK_ERRLOG("Failed to allocate batch pool\n");
++		free(chan);
+ 		return NULL;
+ 	}
+ 
+-- 
+1.8.3.1
+

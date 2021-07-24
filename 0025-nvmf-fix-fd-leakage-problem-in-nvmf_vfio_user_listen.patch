@@ -1,0 +1,45 @@
+From 09b368248b3337e5d7fd0ff9c4b1ce4fb0827ea1 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 20:12:17 +0800
+Subject: [PATCH 25/28] nvmf: fix fd leakage problem in nvmf_vfio_user_listen()
+
+In nvmf_vfio_user_listen(), fd should be closed before
+set it to endpoint->fd, otherwise, the fd leakage probem
+occurs.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I3fabc65d2764926e5873475962e4362e46eb37e4
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8309
+Community-CI: Mellanox Build Bot
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: sunshihao <sunshihao@huawei.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ lib/nvmf/vfio_user.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/lib/nvmf/vfio_user.c b/lib/nvmf/vfio_user.c
+index f5daa8d..7ec980a 100644
+--- a/lib/nvmf/vfio_user.c
++++ b/lib/nvmf/vfio_user.c
+@@ -1662,6 +1662,7 @@ nvmf_vfio_user_listen(struct spdk_nvmf_transport *transport,
+ 	}
+ 	free(path);
+ 
++	endpoint->fd = fd;
+ 	err = ftruncate(fd, NVMF_VFIO_USER_DOORBELLS_OFFSET + NVMF_VFIO_USER_DOORBELLS_SIZE);
+ 	if (err != 0) {
+ 		goto out;
+@@ -1675,8 +1676,6 @@ nvmf_vfio_user_listen(struct spdk_nvmf_transport *transport,
+ 		goto out;
+ 	}
+ 
+-	endpoint->fd = fd;
+-
+ 	snprintf(uuid, PATH_MAX, "%s/cntrl", endpoint_id(endpoint));
+ 	SPDK_DEBUGLOG(nvmf_vfio, "%s: doorbells %p\n", uuid, endpoint->doorbells);
+ 
+-- 
+1.8.3.1
+

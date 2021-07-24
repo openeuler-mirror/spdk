@@ -1,0 +1,43 @@
+From 7441bfb0394c6cc54ddcd270a86685b9dad16474 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 18:37:02 +0800
+Subject: [PATCH 23/28] nvmf: check return value of strdup in
+ spdk_nvmf_subsystem_disconnect_host()
+
+In spdk_nvmf_subsystem_disconnect_host(), we should check
+whether strdup() return NULL.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I29cb6b2499ecd2a2367001c0d21ac95da4e10e20
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8304
+Community-CI: Mellanox Build Bot
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+---
+ lib/nvmf/subsystem.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/lib/nvmf/subsystem.c b/lib/nvmf/subsystem.c
+index 8a3dd3b..5fc1813 100644
+--- a/lib/nvmf/subsystem.c
++++ b/lib/nvmf/subsystem.c
+@@ -831,8 +831,13 @@ spdk_nvmf_subsystem_disconnect_host(struct spdk_nvmf_subsystem *subsystem,
+ 		return -ENOMEM;
+ 	}
+ 
+-	ctx->subsystem = subsystem;
+ 	ctx->hostnqn = strdup(hostnqn);
++	if (ctx->hostnqn == NULL) {
++		free(ctx);
++		return -ENOMEM;
++	}
++
++	ctx->subsystem = subsystem;
+ 	ctx->cb_fn = cb_fn;
+ 	ctx->cb_arg = cb_arg;
+ 
+-- 
+1.8.3.1
+
