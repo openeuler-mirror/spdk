@@ -1,0 +1,38 @@
+From 4eca99edc2e23b4d6250907b62e8feda66414fd9 Mon Sep 17 00:00:00 2001
+From: sunshihao520 <sunshihao@huawei.com>
+Date: Tue, 9 Feb 2021 15:45:30 +0800
+Subject: [PATCH 07/15] pkg: add python3 requires in spdk.spec
+
+When use rpm -i to install spdk-tools, it requires python3-configshell
+and python3-pexpect. Add this requires to spec to avoid install failure.
+
+Signed-off-by: sunshihao <sunshihao@huawei.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6336 (master)
+
+(cherry picked from commit a4ee18886d728de55070fd8c08f947be4004c207)
+Change-Id: I7fc7e9aab35c3fd730401282b72b1604f765a73f
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6431
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: sunshihao <sunshihao@huawei.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Ben Walker <benjamin.walker@intel.com>
+---
+ pkg/spdk.spec | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/pkg/spdk.spec b/pkg/spdk.spec
+index 23de4f8..0fc46e7 100644
+--- a/pkg/spdk.spec
++++ b/pkg/spdk.spec
+@@ -32,6 +32,7 @@ BuildRequires: doxygen mscgen graphviz
+ # Install dependencies
+ Requires: dpdk >= 19.11, numactl-libs, openssl-libs
+ Requires: libiscsi, libaio, libuuid
++Requires: python3-configshell, python3-pexpect
+ # NVMe over Fabrics
+ Requires: librdmacm, librdmacm
+ Requires(post): /sbin/ldconfig
+-- 
+1.8.3.1
+

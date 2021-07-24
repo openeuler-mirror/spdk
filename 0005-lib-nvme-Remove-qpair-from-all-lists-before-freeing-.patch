@@ -1,0 +1,89 @@
+From d889786d0044daff1344ed919bc7bab7d88da6ab Mon Sep 17 00:00:00 2001
+From: Vasuki Manikarnike <vasuki.manikarnike@hpe.com>
+Date: Thu, 4 Feb 2021 15:54:37 +0000
+Subject: [PATCH 05/15] lib/nvme: Remove qpair from all lists before freeing
+ it.
+
+Fixes #1777.
+
+When a qpair cannot be allocated because the transport connection fails,
+the qpair was freed without unlinking it from the other structures.
+This was leading to a segfault when attempting to create and free other
+qpairs.
+Also added a unit test to cover this case.
+
+Signed-off-by: Vasuki Manikarnike <vasuki.manikarnike@hpe.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6272 (master)
+
+(cherry picked from commit d92c2f118aa9ccbd242538a01b2ce0e2cf0c6b04)
+Change-Id: I74b78d1847f90117248b07203b43a11ff5cfa5d6
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6393
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+---
+ lib/nvme/nvme_ctrlr.c                           |  4 ++++
+ test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c | 22 ++++++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/lib/nvme/nvme_ctrlr.c b/lib/nvme/nvme_ctrlr.c
+index 1960b0a..ff27771 100644
+--- a/lib/nvme/nvme_ctrlr.c
++++ b/lib/nvme/nvme_ctrlr.c
+@@ -418,8 +418,12 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
+ 	rc = spdk_nvme_ctrlr_connect_io_qpair(ctrlr, qpair);
+ 	if (rc != 0) {
+ 		SPDK_ERRLOG("nvme_transport_ctrlr_connect_io_qpair() failed\n");
++		nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
++		nvme_ctrlr_proc_remove_io_qpair(qpair);
+ 		TAILQ_REMOVE(&ctrlr->active_io_qpairs, qpair, tailq);
++		spdk_bit_array_set(ctrlr->free_io_qids, qpair->id);
+ 		nvme_transport_ctrlr_delete_io_qpair(ctrlr, qpair);
++		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+ 		return NULL;
+ 	}
+ 
+diff --git a/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c b/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
+index 3e2321d..16a4c1b 100644
+--- a/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
++++ b/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
+@@ -2162,6 +2162,27 @@ test_nvme_ctrlr_init_set_keep_alive_timeout(void)
+ 	nvme_ctrlr_destruct(&ctrlr);
+ }
+ 
++static void
++test_alloc_io_qpair_fail(void)
++{
++	struct spdk_nvme_ctrlr ctrlr = {};
++	struct spdk_nvme_qpair *q0;
++
++	setup_qpairs(&ctrlr, 1);
++
++	/* Modify the connect_qpair return code to inject a failure */
++	g_connect_qpair_return_code = 1;
++
++	/* Attempt to allocate a qpair, this should fail */
++	q0 = spdk_nvme_ctrlr_alloc_io_qpair(&ctrlr, NULL, 0);
++	SPDK_CU_ASSERT_FATAL(q0 == NULL);
++
++	/* Verify that the qpair is removed from the lists */
++	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&ctrlr.active_io_qpairs));
++
++	cleanup_qpairs(&ctrlr);
++}
++
+ int main(int argc, char **argv)
+ {
+ 	CU_pSuite	suite = NULL;
+@@ -2200,6 +2221,7 @@ int main(int argc, char **argv)
+ 	CU_ADD_TEST(suite, test_nvme_ctrlr_init_set_nvmf_ioccsz);
+ 	CU_ADD_TEST(suite, test_nvme_ctrlr_init_set_num_queues);
+ 	CU_ADD_TEST(suite, test_nvme_ctrlr_init_set_keep_alive_timeout);
++	CU_ADD_TEST(suite, test_alloc_io_qpair_fail);
+ 
+ 	CU_basic_set_mode(CU_BRM_VERBOSE);
+ 	CU_basic_run_tests();
+-- 
+1.8.3.1
+
