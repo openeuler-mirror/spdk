@@ -1,0 +1,72 @@
+From 7e571efc4d6b726b645cd7dc32bab7231bdf543c Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Fri, 18 Jun 2021 17:11:16 +0800
+Subject: [PATCH 20/28] idxd: fix memleak problem in spdk_idxd_configure_chan()
+
+In spdk_idxd_configure_chan(), if memory allocation fails in
+TAILQ_FOREACH() {} code range, we will goto err_user_comp and
+err_user_desc tag, in which we donot free chan->completions
+and confused batch->user_completions with chan->completions.
+Memleak problem and double free problem may occurs.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I0e588a35184d97cab0ea6b6c013ca8b3342f940a
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8432
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Community-CI: Mellanox Build Bot
+---
+ lib/idxd/idxd.c | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/lib/idxd/idxd.c b/lib/idxd/idxd.c
+index f240225..4f76f09 100644
+--- a/lib/idxd/idxd.c
++++ b/lib/idxd/idxd.c
+@@ -194,7 +194,7 @@ spdk_idxd_configure_chan(struct spdk_idxd_io_channel *chan)
+ 		if (batch->user_desc == NULL) {
+ 			SPDK_ERRLOG("Failed to allocate batch descriptor memory\n");
+ 			rc = -ENOMEM;
+-			goto err_user_desc;
++			goto err_user_desc_or_comp;
+ 		}
+ 
+ 		batch->user_completions = spdk_zmalloc(DESC_PER_BATCH * sizeof(struct idxd_comp),
+@@ -203,7 +203,7 @@ spdk_idxd_configure_chan(struct spdk_idxd_io_channel *chan)
+ 		if (batch->user_completions == NULL) {
+ 			SPDK_ERRLOG("Failed to allocate user completion memory\n");
+ 			rc = -ENOMEM;
+-			goto err_user_comp;
++			goto err_user_desc_or_comp;
+ 		}
+ 	}
+ 
+@@ -212,16 +212,18 @@ spdk_idxd_configure_chan(struct spdk_idxd_io_channel *chan)
+ 
+ 	return 0;
+ 
+-err_user_comp:
++err_user_desc_or_comp:
+ 	TAILQ_FOREACH(batch, &chan->batch_pool, link) {
+ 		spdk_free(batch->user_desc);
++		batch->user_desc = NULL;
++		spdk_free(batch->user_completions);
++		batch->user_completions = NULL;
+ 	}
+-err_user_desc:
+-	TAILQ_FOREACH(batch, &chan->batch_pool, link) {
+-		spdk_free(chan->completions);
+-	}
++	spdk_free(chan->completions);
++	chan->completions = NULL;
+ err_comp:
+ 	spdk_free(chan->desc);
++	chan->desc = NULL;
+ err_desc:
+ 	spdk_bit_array_free(&chan->ring_slots);
+ 
+-- 
+1.8.3.1
+
