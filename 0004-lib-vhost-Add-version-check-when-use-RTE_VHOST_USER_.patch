@@ -1,0 +1,51 @@
+From 0c08337dd060fd42390c6fab26f5a08d0d6269bf Mon Sep 17 00:00:00 2001
+From: sunshihao520 <sunshihao@huawei.com>
+Date: Tue, 9 Feb 2021 15:17:24 +0800
+Subject: [PATCH 04/15] lib:vhost Add version check when use
+ RTE_VHOST_USER_ASYNC_COPY in 21.01
+
+In dpdk 19.11 version, RTE_VHOST_USER_ASYNC_COPY is not define.
+After dpdk 20.08, we can use RTE_VHOST_USER_ASYNC_COPY.
+Use version check to avoid this problem.
+
+Signed-off-by: sunshihao <sunshihao@huawei.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6274 (master)
+
+(cherry picked from commit 9529803fe0f32d69752cf01eeed590056bd43637)
+Change-Id: Iaf9914e8380f3d54cded1e2f16af6a7dc3504f95
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6255
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+---
+ lib/vhost/rte_vhost_compat.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/lib/vhost/rte_vhost_compat.c b/lib/vhost/rte_vhost_compat.c
+index 85cce3d..3c9f691 100644
+--- a/lib/vhost/rte_vhost_compat.c
++++ b/lib/vhost/rte_vhost_compat.c
+@@ -46,6 +46,7 @@
+ #include "spdk/barrier.h"
+ #include "spdk/vhost.h"
+ #include "vhost_internal.h"
++#include <rte_version.h>
+ 
+ #include "spdk_internal/vhost_user.h"
+ 
+@@ -331,7 +332,11 @@ vhost_register_unix_socket(const char *path, const char *ctrl_name,
+ 		}
+ 	}
+ 
++#if RTE_VERSION < RTE_VERSION_NUM(20, 8, 0, 0)
++	if (rte_vhost_driver_register(path, 0) != 0) {
++#else
+ 	if (rte_vhost_driver_register(path, RTE_VHOST_USER_ASYNC_COPY) != 0) {
++#endif
+ 		SPDK_ERRLOG("Could not register controller %s with vhost library\n", ctrl_name);
+ 		SPDK_ERRLOG("Check if domain socket %s already exists\n", path);
+ 		return -EIO;
+-- 
+1.8.3.1
+
