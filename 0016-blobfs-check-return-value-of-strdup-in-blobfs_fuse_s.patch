@@ -1,0 +1,52 @@
+From 65f41dc6b49cb2d8b7bb9e3951f6f4fcf5c93eee Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 18:25:14 +0800
+Subject: [PATCH 16/28] blobfs: check return value of strdup in
+ blobfs_fuse_start()
+
+In blobfs_fuse_start(), bfuse->bdev_name and bfuse->mountpoint
+are allocated by calling strdup(), which may return NULL.
+Here, we will go to err if strdup() returns NULL.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I0599254b3436a310ddd26732312281f07a4972ec
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8303
+Community-CI: Mellanox Build Bot
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+---
+ module/blobfs/bdev/blobfs_fuse.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/module/blobfs/bdev/blobfs_fuse.c b/module/blobfs/bdev/blobfs_fuse.c
+index 1666549..176f81e 100644
+--- a/module/blobfs/bdev/blobfs_fuse.c
++++ b/module/blobfs/bdev/blobfs_fuse.c
+@@ -301,15 +301,19 @@ blobfs_fuse_start(const char *bdev_name, const char *mountpoint, struct spdk_fil
+ 		return -ENOMEM;
+ 	}
+ 
+-	rc = fuse_parse_cmdline(&args, &opts);
+-	assert(rc == 0);
+-
+ 	bfuse->bdev_name = strdup(bdev_name);
+ 	bfuse->mountpoint = strdup(mountpoint);
++	if (!bfuse->bdev_name || !bfuse->mountpoint) {
++		rc = -ENOMEM;
++		goto err;
++	}
+ 	bfuse->fs = fs;
+ 	bfuse->cb_fn = cb_fn;
+ 	bfuse->cb_arg = cb_arg;
+ 
++	rc = fuse_parse_cmdline(&args, &opts);
++	assert(rc == 0);
++
+ 	fuse_handle = fuse_new(&args, &spdk_fuse_oper, sizeof(spdk_fuse_oper), NULL);
+ 	fuse_opt_free_args(&args);
+ 	if (fuse_handle == NULL) {
+-- 
+1.8.3.1
+

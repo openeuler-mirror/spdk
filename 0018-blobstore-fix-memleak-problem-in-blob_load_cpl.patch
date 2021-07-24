@@ -1,0 +1,50 @@
+From 7c4665e485e764f4fee069e60bdeffa387b15a4b Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 19:53:08 +0800
+Subject: [PATCH 18/28] blobstore:fix memleak problem in blob_load_cpl()
+
+In blob_load_cpl(), spdk_realloc() is called to realloc
+memory of ctx->pages. If spdk_realloc() return NULL,
+the ctx->pages is set to NULL without being freed,
+and then a memleak problem occurs.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: Idf21b690e89beab0245ba57a5de66a4f506d54fb
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8308
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+---
+ lib/blob/blobstore.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/lib/blob/blobstore.c b/lib/blob/blobstore.c
+index 08483fc..1f7d224 100644
+--- a/lib/blob/blobstore.c
++++ b/lib/blob/blobstore.c
+@@ -1490,16 +1490,18 @@ blob_load_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
+ 	}
+ 
+ 	if (page->next != SPDK_INVALID_MD_PAGE) {
++		struct spdk_blob_md_page *tmp_pages;
+ 		uint32_t next_page = page->next;
+ 		uint64_t next_lba = bs_md_page_to_lba(blob->bs, next_page);
+ 
+ 		/* Read the next page */
+-		ctx->num_pages++;
+-		ctx->pages = spdk_realloc(ctx->pages, (sizeof(*page) * ctx->num_pages), 0);
+-		if (ctx->pages == NULL) {
++		tmp_pages = spdk_realloc(ctx->pages, (sizeof(*page) * (ctx->num_pages + 1)), 0);
++		if (tmp_pages == NULL) {
+ 			blob_load_final(ctx, -ENOMEM);
+ 			return;
+ 		}
++		ctx->num_pages++;
++		ctx->pages = tmp_pages;
+ 
+ 		bs_sequence_read_dev(seq, &ctx->pages[ctx->num_pages - 1],
+ 				     next_lba,
+-- 
+1.8.3.1
+
