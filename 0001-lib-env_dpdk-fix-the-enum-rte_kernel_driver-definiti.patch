@@ -1,16 +1,24 @@
-From ca3cf79c6a8037166f28c70f3c4f85d6573abccd Mon Sep 17 00:00:00 2001
-From: sunshihao <sunshihao@huawei.com>
-Date: Thu, 4 Feb 2021 15:42:44 +0800
-Subject: [PATCH] spdk: fix the deference between dpdk 19.11 and dpdk 20.11
+From 5932cd76b357acbfcd9bfa56f4e7f5b3225815e9 Mon Sep 17 00:00:00 2001
+From: sunshihao520 <sunshihao@huawei.com>
+Date: Thu, 4 Feb 2021 14:52:43 +0800
+Subject: [PATCH 01/15] lib:env_dpdk fix the enum rte_kernel_driver definition
+ deference between dpdk 19.11 and 20.11
 
-In dpdk 19.11, we use the old kdrv definiton, the new kdrv name was added in
-dpdk-20.11, this patch is to solve this problem.
-
+In dpdk 19.11, rte_kernel_driver is the old version, add version check before use the members.
 Signed-off-by: sunshihao <sunshihao@huawei.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6252 (master)
+
+(cherry picked from commit b1687cd45680d1573be9f66e748014fd9c5e9e4e)
+Change-Id: Ic1db37cc0760c7d03692fd2cdcbb6ff1e41f872d
+Signed-off-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6321
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: sunshihao <sunshihao@huawei.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
 ---
- lib/env_dpdk/memory.c        | 12 ++++++++++++
- lib/vhost/rte_vhost_compat.c |  2 +-
- 2 files changed, 13 insertions(+), 1 deletion(-)
+ lib/env_dpdk/memory.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
 
 diff --git a/lib/env_dpdk/memory.c b/lib/env_dpdk/memory.c
 index f49dcf4..c923483 100644
@@ -52,19 +60,6 @@ index f49dcf4..c923483 100644
  			/* This is a PCI device using vfio */
  			g_vfio.device_ref++;
  		}
-diff --git a/lib/vhost/rte_vhost_compat.c b/lib/vhost/rte_vhost_compat.c
-index 85cce3d..e1747cc 100644
---- a/lib/vhost/rte_vhost_compat.c
-+++ b/lib/vhost/rte_vhost_compat.c
-@@ -331,7 +331,7 @@ vhost_register_unix_socket(const char *path, const char *ctrl_name,
- 		}
- 	}
- 
--	if (rte_vhost_driver_register(path, RTE_VHOST_USER_ASYNC_COPY) != 0) {
-+	if (rte_vhost_driver_register(path, 0) != 0) {
- 		SPDK_ERRLOG("Could not register controller %s with vhost library\n", ctrl_name);
- 		SPDK_ERRLOG("Check if domain socket %s already exists\n", path);
- 		return -EIO;
 -- 
 1.8.3.1
 
