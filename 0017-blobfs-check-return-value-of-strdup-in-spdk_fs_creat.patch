@@ -1,0 +1,51 @@
+From 199309e555028889c4cf5bb02d3d5b1278bb3ce5 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 16:17:32 +0800
+Subject: [PATCH 17/28] blobfs: check return value of strdup in
+ spdk_fs_create_file_async()
+
+In spdk_fs_create_file_async(), file->name is set to strdup(name).
+We should check whether file->name is equal to NULL.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I2219cc353eb4711290aee2599505f57af9088bb2
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8302
+Community-CI: Mellanox Build Bot
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ lib/blobfs/blobfs.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/lib/blobfs/blobfs.c b/lib/blobfs/blobfs.c
+index c9bcde8..65c92a9 100644
+--- a/lib/blobfs/blobfs.c
++++ b/lib/blobfs/blobfs.c
+@@ -1100,6 +1100,8 @@ spdk_fs_create_file_async(struct spdk_filesystem *fs, const char *name,
+ 	req = alloc_fs_request(fs->md_target.md_fs_channel);
+ 	if (req == NULL) {
+ 		SPDK_ERRLOG("Cannot allocate create async req for file=%s\n", name);
++		TAILQ_REMOVE(&fs->files, file, tailq);
++		file_free(file);
+ 		cb_fn(cb_arg, -ENOMEM);
+ 		return;
+ 	}
+@@ -1110,6 +1112,14 @@ spdk_fs_create_file_async(struct spdk_filesystem *fs, const char *name,
+ 	args->arg = cb_arg;
+ 
+ 	file->name = strdup(name);
++	if (!file->name) {
++		SPDK_ERRLOG("Cannot allocate file->name for file=%s\n", name);
++		free_fs_request(req);
++		TAILQ_REMOVE(&fs->files, file, tailq);
++		file_free(file);
++		cb_fn(cb_arg, -ENOMEM);
++		return;
++	}
+ 	_file_build_trace_arg_name(file);
+ 	spdk_bs_create_blob(fs->bs, fs_create_blob_create_cb, args);
+ }
+-- 
+1.8.3.1
+

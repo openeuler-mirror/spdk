@@ -1,0 +1,62 @@
+From b97c91b7d2480ee1cc038e70f6e2de2e2bb5d19d Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 21:29:33 +0800
+Subject: [PATCH 28/28] uring: set fd to -1 after close(fd) in
+ uring_sock_create()
+
+In uring_sock_create(), we loops through all the addresses available.
+If something is wrong, we should close(fd) and set fd to -1, and
+try the next address. Only, when one fd satisfies all conditions,
+we will break the loop with the useful fd.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I22eada5437776fe90a6b57ab42cbad6dc4b0585c
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8311
+Community-CI: Mellanox Build Bot
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+---
+ module/sock/uring/uring.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/module/sock/uring/uring.c b/module/sock/uring/uring.c
+index be76973..8f22758 100644
+--- a/module/sock/uring/uring.c
++++ b/module/sock/uring/uring.c
+@@ -424,12 +424,14 @@ retry:
+ 		rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+ 		if (rc != 0) {
+ 			close(fd);
++			fd = -1;
+ 			/* error */
+ 			continue;
+ 		}
+ 		rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+ 		if (rc != 0) {
+ 			close(fd);
++			fd = -1;
+ 			/* error */
+ 			continue;
+ 		}
+@@ -439,6 +441,7 @@ retry:
+ 			rc = setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
+ 			if (rc != 0) {
+ 				close(fd);
++				fd = -1;
+ 				/* error */
+ 				continue;
+ 			}
+@@ -448,6 +451,7 @@ retry:
+ 			rc = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+ 			if (rc != 0) {
+ 				close(fd);
++				fd = -1;
+ 				/* error */
+ 				continue;
+ 			}
+-- 
+1.8.3.1
+
