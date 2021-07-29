@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01
-Release: 3
+Release: 4
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -23,6 +23,19 @@ Patch12: 0012-lib-util-Fix-valgrind-error-reported-on-ARM-platform.patch
 Patch13: 0013-lib-vhost-force-cpumask-to-be-subset-of-application-.patch
 Patch14: 0014-autorun-allow-pass-configuration-file-path.patch
 Patch15: 0015-spdk_top-fix-app-crashing-on-tab-selection-with-TAB-.patch
+Patch16: 0016-blobfs-check-return-value-of-strdup-in-blobfs_fuse_s.patch
+Patch17: 0017-blobfs-check-return-value-of-strdup-in-spdk_fs_creat.patch
+Patch18: 0018-blobstore-fix-memleak-problem-in-blob_load_cpl.patch
+Patch19: 0019-blobstore-fix-potential-memleak-problem-in-blob_seri.patch
+Patch20: 0020-idxd-fix-memleak-problem-in-spdk_idxd_configure_chan.patch
+Patch21: 0021-idxd-fix-one-memleak-problem-in-spdk_idxd_get_channe.patch
+Patch22: 0022-ioat-fix-potential-double-free-problem-in-ioat_chann.patch
+Patch23: 0023-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
+Patch24: 0024-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
+Patch25: 0025-nvmf-fix-fd-leakage-problem-in-nvmf_vfio_user_listen.patch
+Patch26: 0026-posix-set-fd-to-1-after-close-fd-in-posix_sock_creat.patch
+Patch27: 0027-spdk_top-check-return-value-of-strdup-in-store_last_.patch
+Patch28: 0028-uring-set-fd-to-1-after-close-fd-in-uring_sock_creat.patch
 
 %define package_version %{version}-%{release}
 
@@ -183,6 +196,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-4
+- backport 13 bugfix from upstream
+
 * Thu Jul 13 2021 Xiaokeng Li <lixiaokeng@huawei.com> - 21.01-3
 - backport bugfix from upstream
 

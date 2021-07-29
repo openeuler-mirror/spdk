@@ -1,0 +1,39 @@
+From 9dace0d9cae727747f333f032537e873c73d9d8c Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 19:04:05 +0800
+Subject: [PATCH 27/28] spdk_top:check return value of strdup in
+ store_last_run_counter()
+
+In store_last_run_counter(), history->poller_name is set to
+strdup(), which may return NULL. We should deal with it.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: Ice5f27c4a7d2f9abd528b97a48ff5f92b48c8d7c
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8306
+Community-CI: Mellanox Build Bot
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ app/spdk_top/spdk_top.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/app/spdk_top/spdk_top.c b/app/spdk_top/spdk_top.c
+index 402c2a5..3c0a889 100644
+--- a/app/spdk_top/spdk_top.c
++++ b/app/spdk_top/spdk_top.c
+@@ -1017,6 +1017,11 @@ store_last_run_counter(const char *poller_name, uint64_t thread_id, uint64_t las
+ 		return;
+ 	}
+ 	history->poller_name = strdup(poller_name);
++	if (!history->poller_name) {
++		fprintf(stderr, "Unable to allocate poller_name of a history object in store_last_run_counter.\n");
++		free(history);
++		return;
++	}
+ 	history->thread_id = thread_id;
+ 	history->last_run_counter = last_run_counter;
+ 
+-- 
+1.8.3.1
+

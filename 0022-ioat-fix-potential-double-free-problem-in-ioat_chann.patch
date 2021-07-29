@@ -1,0 +1,41 @@
+From 46dd4eea588780d082ff0ce002a1dc0ad6e3e7eb Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 12:23:58 +0800
+Subject: [PATCH 22/28] ioat: fix potential double free problem in
+ ioat_channel_start()
+
+In ioat_channel_start(), if spdk_vtophys(ioat->comp_update) returns
+SPDK_VTOPHYS_ERROR, spdk_free is called to free ioat->comp_update,
+and ioat->comp_update is not set to NULL. However, the caller
+ioat_attach() will also call ioat_channel_destruct() to free
+ioat->comp_update, then double-free problem occurs.
+
+Here, we will not free ioat->comp_update in ioat_channel_start(),
+ioat_channel_destruct() will do that.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: I3be19a3feec5c2188051ee67820bfd1e61de9b48
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8300
+Community-CI: Mellanox Build Bot
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ lib/ioat/ioat.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/lib/ioat/ioat.c b/lib/ioat/ioat.c
+index 27ac0a0..af83c42 100644
+--- a/lib/ioat/ioat.c
++++ b/lib/ioat/ioat.c
+@@ -429,7 +429,6 @@ ioat_channel_start(struct spdk_ioat_chan *ioat)
+ 
+ 	comp_update_bus_addr = spdk_vtophys((void *)ioat->comp_update, NULL);
+ 	if (comp_update_bus_addr == SPDK_VTOPHYS_ERROR) {
+-		spdk_free((void *)ioat->comp_update);
+ 		return -1;
+ 	}
+ 
+-- 
+1.8.3.1
+
