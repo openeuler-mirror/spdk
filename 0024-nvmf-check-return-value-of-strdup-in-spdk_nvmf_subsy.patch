@@ -1,0 +1,82 @@
+From b367f485f83e65b76d3ae67b5ab4bc344e1a7c49 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 18:59:13 +0800
+Subject: [PATCH 24/28] nvmf:check return value of strdup in
+ spdk_nvmf_subsystem_add_ns_ext()
+
+In spdk_nvmf_subsystem_add_ns_ext(), ns->ptpl_file is set to strdup(),
+which may return NULL. We should deal with it.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: If95102fe9d6d789b8ba9e846c4d7f4e22e48a93c
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8305
+Community-CI: Mellanox Build Bot
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ lib/nvmf/subsystem.c | 30 ++++++++++++++++++------------
+ 1 file changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/lib/nvmf/subsystem.c b/lib/nvmf/subsystem.c
+index 5fc1813..5729524 100644
+--- a/lib/nvmf/subsystem.c
++++ b/lib/nvmf/subsystem.c
+@@ -1451,14 +1451,14 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
+ 			rc = nvmf_ns_reservation_restore(ns, &info);
+ 			if (rc) {
+ 				SPDK_ERRLOG("Subsystem restore reservation failed\n");
+-				subsystem->ns[opts.nsid - 1] = NULL;
+-				spdk_bdev_module_release_bdev(ns->bdev);
+-				spdk_bdev_close(ns->desc);
+-				free(ns);
+-				return 0;
++				goto err_ns_reservation_restore;
+ 			}
+ 		}
+ 		ns->ptpl_file = strdup(ptpl_file);
++		if (!ns->ptpl_file) {
++			SPDK_ERRLOG("Namespace ns->ptpl_file allocation failed\n");
++			goto err_strdup;
++		}
+ 	}
+ 
+ 	for (transport = spdk_nvmf_transport_get_first(subsystem->tgt); transport;
+@@ -1467,13 +1467,7 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
+ 			rc = transport->ops->subsystem_add_ns(transport, subsystem, ns);
+ 			if (rc) {
+ 				SPDK_ERRLOG("Namespace attachment is not allowed by %s transport\n", transport->ops->name);
+-				free(ns->ptpl_file);
+-				nvmf_ns_reservation_clear_all_registrants(ns);
+-				subsystem->ns[opts.nsid - 1] = NULL;
+-				spdk_bdev_module_release_bdev(ns->bdev);
+-				spdk_bdev_close(ns->desc);
+-				free(ns);
+-				return 0;
++				goto err_subsystem_add_ns;
+ 			}
+ 		}
+ 	}
+@@ -1486,6 +1480,18 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
+ 	nvmf_subsystem_ns_changed(subsystem, opts.nsid);
+ 
+ 	return opts.nsid;
++
++err_subsystem_add_ns:
++	free(ns->ptpl_file);
++err_strdup:
++	nvmf_ns_reservation_clear_all_registrants(ns);
++err_ns_reservation_restore:
++	subsystem->ns[opts.nsid - 1] = NULL;
++	spdk_bdev_module_release_bdev(ns->bdev);
++	spdk_bdev_close(ns->desc);
++	free(ns);
++	return 0;
++
+ }
+ 
+ uint32_t
+-- 
+1.8.3.1
+

@@ -1,0 +1,62 @@
+From ab69fc61073df903970dbf00582617970f97a9ea Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 21:10:19 +0800
+Subject: [PATCH 26/28] posix: set fd to -1 after close(fd) in
+ posix_sock_create()
+
+In posix_sock_create(), we loops through all the addresses available.
+If something is wrong, we should close(fd) and set fd to -1, and
+try the next address. Only, when one fd satisfies all conditions,
+we will break the loop with the useful fd.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: Icbfc10246c92b95cacd6eb058e6e46cf8924fc4c
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8310
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Shuhei Matsumoto <shuhei.matsumoto.xt@hitachi.com>
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+---
+ module/sock/posix/posix.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/module/sock/posix/posix.c b/module/sock/posix/posix.c
+index c180a16..ebafc1e 100644
+--- a/module/sock/posix/posix.c
++++ b/module/sock/posix/posix.c
+@@ -468,12 +468,14 @@ retry:
+ 		rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+ 		if (rc != 0) {
+ 			close(fd);
++			fd = -1;
+ 			/* error */
+ 			continue;
+ 		}
+ 		rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+ 		if (rc != 0) {
+ 			close(fd);
++			fd = -1;
+ 			/* error */
+ 			continue;
+ 		}
+@@ -483,6 +485,7 @@ retry:
+ 			rc = setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
+ 			if (rc != 0) {
+ 				close(fd);
++				fd = -1;
+ 				/* error */
+ 				continue;
+ 			}
+@@ -493,6 +496,7 @@ retry:
+ 			rc = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+ 			if (rc != 0) {
+ 				close(fd);
++				fd = -1;
+ 				/* error */
+ 				continue;
+ 			}
+-- 
+1.8.3.1
+
