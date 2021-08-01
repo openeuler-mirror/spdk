@@ -1,0 +1,69 @@
+From 94f83ca86169a3b5971c8edf99e3a4ff8e6d2d51 Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Sun, 13 Jun 2021 19:42:14 +0800
+Subject: [PATCH 19/28] blobstore: fix potential memleak problem in
+ blob_serialize_add_page()
+
+In blob_serialize_add_page(), *pages is set to spdk_realloc(*pages).
+If spdk_realloc() returns NULL, the *pages pointer will be
+overridden, whose memory will leak.
+
+Here, we introduce a new var (tmp_pages) for checking the return
+value of spdk_realloc(*pages).
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Change-Id: Ib2ead3f3b5d5e44688d1f0568816f483aa9e101f
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/8307
+Community-CI: Mellanox Build Bot
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+---
+ lib/blob/blobstore.c | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/lib/blob/blobstore.c b/lib/blob/blobstore.c
+index 1f7d224..551e615 100644
+--- a/lib/blob/blobstore.c
++++ b/lib/blob/blobstore.c
+@@ -874,26 +874,28 @@ blob_serialize_add_page(const struct spdk_blob *blob,
+ 			uint32_t *page_count,
+ 			struct spdk_blob_md_page **last_page)
+ {
+-	struct spdk_blob_md_page *page;
++	struct spdk_blob_md_page *page, *tmp_pages;
+ 
+ 	assert(pages != NULL);
+ 	assert(page_count != NULL);
+ 
++	*last_page = NULL;
+ 	if (*page_count == 0) {
+ 		assert(*pages == NULL);
+-		*page_count = 1;
+ 		*pages = spdk_malloc(SPDK_BS_PAGE_SIZE, 0,
+ 				     NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
++		if (*pages == NULL) {
++			return -ENOMEM;
++		}
++		*page_count = 1;
+ 	} else {
+ 		assert(*pages != NULL);
++		tmp_pages = spdk_realloc(*pages, SPDK_BS_PAGE_SIZE * (*page_count + 1), 0);
++		if (tmp_pages == NULL) {
++			return -ENOMEM;
++		}
+ 		(*page_count)++;
+-		*pages = spdk_realloc(*pages, SPDK_BS_PAGE_SIZE * (*page_count), 0);
+-	}
+-
+-	if (*pages == NULL) {
+-		*page_count = 0;
+-		*last_page = NULL;
+-		return -ENOMEM;
++		*pages = tmp_pages;
+ 	}
+ 
+ 	page = &(*pages)[*page_count - 1];
+-- 
+1.8.3.1
+
