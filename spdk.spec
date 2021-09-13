@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01
-Release: 4
+Release: 5
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -36,6 +36,7 @@ Patch25: 0025-nvmf-fix-fd-leakage-problem-in-nvmf_vfio_user_listen.patch
 Patch26: 0026-posix-set-fd-to-1-after-close-fd-in-posix_sock_creat.patch
 Patch27: 0027-spdk_top-check-return-value-of-strdup-in-store_last_.patch
 Patch28: 0028-uring-set-fd-to-1-after-close-fd-in-uring_sock_creat.patch
+Patch29: 0029-spdk-use-fstack-protector-strong-instead-of-fstack-p.patch
 
 %define package_version %{version}-%{release}
 
@@ -196,6 +197,10 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Mon Sep 13 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-5
+- use -fstack-protector-strong instead of -fstack-protector for
+stronger security.
+
 * Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-4
 - backport 13 bugfix from upstream
 
