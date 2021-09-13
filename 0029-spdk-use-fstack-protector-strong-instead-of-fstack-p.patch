@@ -1,0 +1,30 @@
+From b1959244d8178975119606e9fc1323dbee06c18f Mon Sep 17 00:00:00 2001
+From: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+Date: Mon, 13 Sep 2021 21:36:51 +0800
+Subject: [PATCH] spdk: use -fstack-protector-strong instead of
+ -fstack-protector
+
+use -fstack-protector-strong instead of -fstack-protector for
+stronger security.
+
+Signed-off-by: Zhiqiang Liu <liuzhiqiang26@huawei.com>
+---
+ mk/spdk.common.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/mk/spdk.common.mk b/mk/spdk.common.mk
+index f3fe5c2..dc8ed69 100644
+--- a/mk/spdk.common.mk
++++ b/mk/spdk.common.mk
+@@ -120,7 +120,7 @@ COMMON_CFLAGS += -D_GNU_SOURCE
+ COMMON_CFLAGS += -fPIC
+ 
+ # Enable stack buffer overflow checking
+-COMMON_CFLAGS += -fstack-protector
++COMMON_CFLAGS += -fstack-protector-strong
+ 
+ # Prevent accidental multiple definitions of global variables
+ COMMON_CFLAGS += -fno-common
+-- 
+1.8.3.1
+
