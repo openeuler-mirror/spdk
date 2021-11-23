@@ -2,40 +2,23 @@
 %bcond_with doc
 
 Name: spdk
-Version: 21.01
-Release: 4
+Version: 21.01.1
+Release: 1
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
-Source0: https://github.com/spdk/spdk/archive/v%{version}.tar.gz
-Patch1:  0001-lib-env_dpdk-fix-the-enum-rte_kernel_driver-definiti.patch
-Patch2:  0002-env_dpdk-add-rte_ethdev-dependency.patch
-Patch3:  0003-pkg-spdk.spec-Add-ncurses-devel-to-BuildRequires.patch
-Patch4:  0004-lib-vhost-Add-version-check-when-use-RTE_VHOST_USER_.patch
-Patch5:  0005-lib-nvme-Remove-qpair-from-all-lists-before-freeing-.patch
-Patch6:  0006-lib-env_dpdk-add-rte_net-dependency.patch
-Patch7:  0007-pkg-add-python3-requires-in-spdk.spec.patch
-Patch8:  0008-sock-add-enable_quickack-and-enable_placement_id-whe.patch
-Patch9:  0009-bdev-ocssd-Fix-the-bug-that-no-media-event-is-pushed.patch
-Patch10: 0010-lib-iscsi-return-immediately-from-iscsi_parse_params.patch
-Patch11: 0011-nbd-set-io-timeout.patch
-Patch12: 0012-lib-util-Fix-valgrind-error-reported-on-ARM-platform.patch
-Patch13: 0013-lib-vhost-force-cpumask-to-be-subset-of-application-.patch
-Patch14: 0014-autorun-allow-pass-configuration-file-path.patch
-Patch15: 0015-spdk_top-fix-app-crashing-on-tab-selection-with-TAB-.patch
-Patch16: 0016-blobfs-check-return-value-of-strdup-in-blobfs_fuse_s.patch
-Patch17: 0017-blobfs-check-return-value-of-strdup-in-spdk_fs_creat.patch
-Patch18: 0018-blobstore-fix-memleak-problem-in-blob_load_cpl.patch
-Patch19: 0019-blobstore-fix-potential-memleak-problem-in-blob_seri.patch
-Patch20: 0020-idxd-fix-memleak-problem-in-spdk_idxd_configure_chan.patch
-Patch21: 0021-idxd-fix-one-memleak-problem-in-spdk_idxd_get_channe.patch
-Patch22: 0022-ioat-fix-potential-double-free-problem-in-ioat_chann.patch
-Patch23: 0023-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
-Patch24: 0024-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
-Patch25: 0025-nvmf-fix-fd-leakage-problem-in-nvmf_vfio_user_listen.patch
-Patch26: 0026-posix-set-fd-to-1-after-close-fd-in-posix_sock_creat.patch
-Patch27: 0027-spdk_top-check-return-value-of-strdup-in-store_last_.patch
-Patch28: 0028-uring-set-fd-to-1-after-close-fd-in-uring_sock_creat.patch
+Source0: https://github.com/spdk/spdk/archive/refs/tags/v%{version}.tar.gz
+Patch1: 0001-blobstore-fix-memleak-problem-in-blob_load_cpl.patch
+Patch2: 0002-blobstore-fix-potential-memleak-problem-in-blob_seri.patch
+Patch3: 0003-idxd-fix-memleak-problem-in-spdk_idxd_configure_chan.patch
+Patch4: 0004-idxd-fix-one-memleak-problem-in-spdk_idxd_get_channe.patch
+Patch5: 0005-ioat-fix-potential-double-free-problem-in-ioat_chann.patch
+Patch6: 0006-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
+Patch7: 0007-nvmf-check-return-value-of-strdup-in-spdk_nvmf_subsy.patch
+Patch8: 0008-nvmf-fix-fd-leakage-problem-in-nvmf_vfio_user_listen.patch
+Patch9: 0009-posix-set-fd-to-1-after-close-fd-in-posix_sock_creat.patch
+Patch10: 0010-spdk_top-check-return-value-of-strdup-in-store_last_.patch
+Patch11: 0011-uring-set-fd-to-1-after-close-fd-in-uring_sock_creat.patch
 
 %define package_version %{version}-%{release}
 
@@ -117,7 +100,6 @@ BuildArch: noarch
 # add -q
 %autosetup -n spdk-%{version} -p1
 
-
 %build
 ./configure --prefix=%{_usr} \
 	--disable-tests \
@@ -196,6 +178,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Tue Nov 23 2021 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-1
+- rebase to v21.01.1 Maintenance LTS Version
+
 * Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-4
 - backport 13 bugfix from upstream
 
