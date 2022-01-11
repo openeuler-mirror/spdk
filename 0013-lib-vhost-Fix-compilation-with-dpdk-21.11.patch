@@ -1,0 +1,80 @@
+From f72cab94dd35d7b45ec5a4f35967adf3184ca616 Mon Sep 17 00:00:00 2001
+From: Alexey Marchuk <alexeymar@mellanox.com>
+Date: Mon, 15 Nov 2021 11:01:14 +0300
+Subject: [PATCH] lib/vhost: Fix compilation with dpdk 21.11
+
+Structure vhost_device_ops was renamed to
+rte_vhost_device_ops
+
+Signed-off-by: Alexey Marchuk <alexeymar@mellanox.com>
+Change-Id: Ie9601099d47465536500aa37fc113aeae03a8254
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/10223
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+Community-CI: Broadcom CI <spdk-ci.pdl@broadcom.com>
+Reviewed-by: John Kariuki <John.K.Kariuki@intel.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+---
+ lib/vhost/rte_vhost_compat.c           | 5 +++++
+ test/unit/lib/vhost/vhost.c/vhost_ut.c | 7 +++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/lib/vhost/rte_vhost_compat.c b/lib/vhost/rte_vhost_compat.c
+index 3c9f691883a..08574cfad07 100644
+--- a/lib/vhost/rte_vhost_compat.c
++++ b/lib/vhost/rte_vhost_compat.c
+@@ -3,6 +3,7 @@
+  *
+  *   Copyright (c) Intel Corporation.
+  *   All rights reserved.
++ *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
+  *
+  *   Redistribution and use in source and binary forms, with or without
+  *   modification, are permitted provided that the following conditions
+@@ -134,7 +135,11 @@ destroy_connection(int vid)
+ 	vhost_destroy_connection_cb(vid);
+ }
+ 
++#if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
++static const struct rte_vhost_device_ops g_spdk_vhost_ops = {
++#else
+ static const struct vhost_device_ops g_spdk_vhost_ops = {
++#endif
+ 	.new_device =  start_device,
+ 	.destroy_device = stop_device,
+ 	.new_connection = new_connection,
+diff --git a/test/unit/lib/vhost/vhost.c/vhost_ut.c b/test/unit/lib/vhost/vhost.c/vhost_ut.c
+index df1c32d28e6..e62da334688 100644
+--- a/test/unit/lib/vhost/vhost.c/vhost_ut.c
++++ b/test/unit/lib/vhost/vhost.c/vhost_ut.c
+@@ -3,6 +3,7 @@
+  *
+  *   Copyright (c) Intel Corporation.
+  *   All rights reserved.
++ *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
+  *
+  *   Redistribution and use in source and binary forms, with or without
+  *   modification, are permitted provided that the following conditions
+@@ -41,6 +42,7 @@
+ #include "unit/lib/json_mock.c"
+ 
+ #include "vhost/vhost.c"
++#include <rte_version.h>
+ 
+ DEFINE_STUB(rte_vhost_set_vring_base, int, (int vid, uint16_t queue_id,
+ 		uint16_t last_avail_idx, uint16_t last_used_idx), 0);
+@@ -65,8 +67,13 @@ DEFINE_STUB(rte_vhost_enable_guest_notification, int,
+ 	    (int vid, uint16_t queue_id, int enable), 0);
+ DEFINE_STUB(rte_vhost_get_ifname, int, (int vid, char *buf, size_t len), 0);
+ DEFINE_STUB(rte_vhost_driver_start, int, (const char *name), 0);
++#if RTE_VERSION >= RTE_VERSION_NUM(21, 11, 0, 0)
++DEFINE_STUB(rte_vhost_driver_callback_register, int,
++	    (const char *path, struct rte_vhost_device_ops const *const ops), 0);
++#else
+ DEFINE_STUB(rte_vhost_driver_callback_register, int,
+ 	    (const char *path, struct vhost_device_ops const *const ops), 0);
++#endif
+ DEFINE_STUB(rte_vhost_driver_disable_features, int, (const char *path, uint64_t features), 0);
+ DEFINE_STUB(rte_vhost_driver_set_features, int, (const char *path, uint64_t features), 0);
+ DEFINE_STUB(rte_vhost_driver_register, int, (const char *path, uint64_t flags), 0);
