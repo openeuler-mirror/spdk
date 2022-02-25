@@ -1,0 +1,53 @@
+From fcc389490a4abe26c1efe6cc624dc2925ed6b670 Mon Sep 17 00:00:00 2001
+From: Rui Chang <rui.chang@arm.com>
+Date: Tue, 18 May 2021 15:32:56 +0800
+Subject: [PATCH] configure: add gcc version check for ARM Neoverse-N1 platform
+
+When doing debug build on ARM Neoverse-N1 platform, if gcc version is
+lower than 8.4.0, we may met following errors:
+
+/tmp/cc24qua1.s: Assembler messages:
+/tmp/cc24qua1.s:53: Error: selected processor does not support `casp x0,x1,x2,x3,[x4]'
+/tmp/cc24qua1.s:85: Error: selected processor does not support `caspa x0,x1,x2,x3,[x4]'
+/tmp/cc24qua1.s:117: Error: selected processor does not support `caspl x0,x1,x2,x3,[x4]'
+/tmp/cc24qua1.s:149: Error: selected processor does not support `caspal x0,x1,x2,x3,[x4]'
+
+The change also fix the problem by pass armv8.2-a+crypto as target architecture.
+
+Signed-off-by: Rui Chang <rui.chang@arm.com>
+Change-Id: I2053b9440e06873066480d63e471802df2e69d4e
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/7949
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+---
+ configure | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/configure b/configure
+index 7d063f4ef3b..a2d0c5a62fb 100755
+--- a/configure
++++ b/configure
+@@ -786,6 +786,20 @@ 		exit 1
+ 	fi
+ fi
+ 
++# For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
++if [[ "${CONFIG[DEBUG]}" = "y" && $arch = aarch64* && "$CC_TYPE" = "gcc" ]]; then
++	GCC_VERSION=$($CC -dumpfullversion)
++	PART_NUM=$(grep -i -m 1 "CPU part" /proc/cpuinfo | awk '{print $4}')
++
++	if [[ "$(printf '%s\n' "8.4.0" "$GCC_VERSION" | sort -V | head -n1)" != "8.4.0" ]]; then
++		if [[ $PART_NUM = 0xd0c ]]; then
++			echo "WARNING: For ARM Neoverse-N1 platform, debug build needs GCC version newer than 8.4."
++			echo "         Will work around this by using armv8.2-a+crypto as target architecture for now."
++			CONFIG[ARCH]=armv8.2-a+crypto
++		fi
++	fi
++fi
++
+ # We are now ready to generate final configuration. But first do sanity
+ # check to see if all keys in CONFIG array have its reflection in CONFIG file.
+ if [ $(egrep -c "^\s*CONFIG_[[:alnum:]_]+=" $rootdir/CONFIG) -ne ${#CONFIG[@]} ]; then
