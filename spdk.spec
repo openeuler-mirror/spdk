@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 3
+Release: 4
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -23,6 +23,7 @@ Patch12: 0012-spdk-use-fstack-protector-strong-instead-of-fstack-p.patch
 Patch13: 0013-lib-vhost-Fix-compilation-with-dpdk-21.11.patch
 Patch14: 0014-mk-Fix-debug-build-error-on-ARM-ThunderX2-and-neoverse_N1_platform.patch
 Patch15: 0015-configure-add-gcc-version-check-for-ARM-Neoverse-N1_platform.patch
+Patch16: 0016-Enhance-security-for-share-library.patch
 
 %define package_version %{version}-%{release}
 
@@ -176,6 +177,10 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Tue Mar 15 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-4
+- Remove rpath link option, Due to it's easy for attacher to
+  construct 'rpath' attacks
+
 * Fri Feb 25 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-3
 - Fix build error on ARM ThunderX2 and neoverse N1 platform
 
