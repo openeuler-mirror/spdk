@@ -1,0 +1,28 @@
+From 56b3831310673beeb0b7d5121cf36b1993ebe322 Mon Sep 17 00:00:00 2001
+From: Weifeng Su <suweifeng1@huawei.com>
+Date: Tue, 15 Mar 2022 11:25:02 +0000
+Subject: [PATCH] Enhance security for share library
+
+Remove rpath link option, Due to it's easy for attacher to
+construct 'rpath' attacks.
+
+Signed-off-by: Weifeng Su <suweifeng1@huawei.com>
+---
+ mk/spdk.common.mk | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/mk/spdk.common.mk b/mk/spdk.common.mk
+index f9409c4..8569687 100644
+--- a/mk/spdk.common.mk
++++ b/mk/spdk.common.mk
+@@ -293,7 +293,6 @@ LINK_CXX=\
+ # Provide function to ease build of a shared lib
+ define spdk_build_realname_shared_lib
+ 	$(CC) -o $@ -shared $(CPPFLAGS) $(LDFLAGS) \
+-	    -Wl,-rpath=$(DESTDIR)/$(libdir) \
+ 	    -Wl,--soname,$(notdir $@) \
+ 	    -Wl,--whole-archive $(1) -Wl,--no-whole-archive \
+ 	    -Wl,--version-script=$(2) \
+-- 
+2.27.0
+

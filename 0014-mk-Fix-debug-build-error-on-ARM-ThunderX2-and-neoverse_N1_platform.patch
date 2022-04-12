@@ -1,0 +1,47 @@
+From de8f3a50ee33c8218ba59bc16297e953121206d7 Mon Sep 17 00:00:00 2001
+From: root <root@wls-x86-hp04.shanghai.arm.com>
+Date: Fri, 19 Mar 2021 15:38:55 +0800
+Subject: [PATCH] mk: Fix debug build error on ARM ThunderX2 and neoverse N1
+ platform
+
+When building spdk on ARM platform like thunderx2 with --enable-debug,
+there are following error:
+
+/tmp/ccOBb4AF.s: Assembler messages:
+/tmp/ccOBb4AF.s:45: Error: selected processor does not support `casp x0,x1,x2,x3,[x4]'
+/tmp/ccOBb4AF.s:77: Error: selected processor does not support `caspa x0,x1,x2,x3,[x4]'
+/tmp/ccOBb4AF.s:109: Error: selected processor does not support `caspl x0,x1,x2,x3,[x4]'
+/tmp/ccOBb4AF.s:141: Error: selected processor does not support `caspal x0,x1,x2,x3,[x4]'
+
+The reason is that DPDK is built with -march=armv8.1-a or -march=armv8.2-a+lse which
+have these instructions while SPDK is built with -march=armv8-a+crc which does not support
+them. Change spdk build machine to native can fix this.
+
+Signed-off-by: Rui Chang <rui.chang@arm.com>
+Change-Id: I759d4ce2c557ce5ff73a802d7a4b6579c4ba64f7
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/7025
+Community-CI: Mellanox Build Bot
+Reviewed-by: Ziye Yang <ziye.yang@intel.com>
+Reviewed-by: Changpeng Liu <changpeng.liu@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+---
+ mk/spdk.common.mk | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/mk/spdk.common.mk b/mk/spdk.common.mk
+index 633a05bda79..897be4d2150 100644
+--- a/mk/spdk.common.mk
++++ b/mk/spdk.common.mk
+@@ -77,11 +77,7 @@ 
+ ifneq ($(filter powerpc%,$(TARGET_MACHINE)),)
+ COMMON_CFLAGS += -mcpu=$(TARGET_ARCHITECTURE)
+ else ifeq ($(TARGET_MACHINE),aarch64)
+-ifeq ($(TARGET_ARCHITECTURE),native)
+-COMMON_CFLAGS += -march=armv8-a+crc
+-else
+ COMMON_CFLAGS += -march=$(TARGET_ARCHITECTURE)
+-endif
+ COMMON_CFLAGS += -DPAGE_SIZE=$(shell getconf PAGESIZE)
+ else
+ COMMON_CFLAGS += -march=$(TARGET_ARCHITECTURE)

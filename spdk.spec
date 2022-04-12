@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 1
+Release: 4
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -19,6 +19,11 @@ Patch8: 0008-nvmf-fix-fd-leakage-problem-in-nvmf_vfio_user_listen.patch
 Patch9: 0009-posix-set-fd-to-1-after-close-fd-in-posix_sock_creat.patch
 Patch10: 0010-spdk_top-check-return-value-of-strdup-in-store_last_.patch
 Patch11: 0011-uring-set-fd-to-1-after-close-fd-in-uring_sock_creat.patch
+Patch12: 0012-spdk-use-fstack-protector-strong-instead-of-fstack-p.patch
+Patch13: 0013-lib-vhost-Fix-compilation-with-dpdk-21.11.patch
+Patch14: 0014-mk-Fix-debug-build-error-on-ARM-ThunderX2-and-neoverse_N1_platform.patch
+Patch15: 0015-configure-add-gcc-version-check-for-ARM-Neoverse-N1_platform.patch
+Patch16: 0016-Enhance-security-for-share-library.patch
 
 %define package_version %{version}-%{release}
 
@@ -43,14 +48,8 @@ BuildRequires: libibverbs-devel, librdmacm-devel
 BuildRequires: doxygen mscgen graphviz
 %endif
 
-%ifarch aarch64
-%global config arm64-armv8a-linux-gcc
-%else
-%global config x86_64-native-linux-gcc
-%endif
-
 # Install dependencies
-Requires: dpdk >= 19.11, numactl-libs, openssl-libs
+Requires: dpdk >= 21.11, numactl-libs, openssl-libs
 Requires: libiscsi, libaio, libuuid
 # NVMe over Fabrics
 Requires: librdmacm, librdmacm
@@ -106,7 +105,7 @@ BuildArch: noarch
 	--disable-unit-tests \
 	--without-crypto \
 	--without-isal \
-	--with-dpdk=/usr/share/dpdk/%{config} \
+	--with-dpdk=/usr/lib64/dpdk/pmds-22.0 \
 	--without-fio \
 	--with-vhost \
 	--without-pmdk \
@@ -178,8 +177,22 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Tue Mar 15 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-4
+- Remove rpath link option, Due to it's easy for attacher to
+  construct 'rpath' attacks
+
+* Fri Feb 25 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-3
+- Fix build error on ARM ThunderX2 and neoverse N1 platform
+
+* Mon Jan 10 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-2
+- Adapt for dpdk 21.11
+
 * Tue Nov 23 2021 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-1
 - rebase to v21.01.1 Maintenance LTS Version
+
+* Mon Sep 13 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-5
+- use -fstack-protector-strong instead of -fstack-protector for
+stronger security.
 
 * Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-4
 - backport 13 bugfix from upstream
