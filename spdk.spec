@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 4
+Release: 5
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -24,6 +24,17 @@ Patch13: 0013-lib-vhost-Fix-compilation-with-dpdk-21.11.patch
 Patch14: 0014-mk-Fix-debug-build-error-on-ARM-ThunderX2-and-neoverse_N1_platform.patch
 Patch15: 0015-configure-add-gcc-version-check-for-ARM-Neoverse-N1_platform.patch
 Patch16: 0016-Enhance-security-for-share-library.patch
+Patch17: 0017-add-HSAK-needed-head-file-and-API-to-spdk.patch
+Patch18: 0018-lib-bdev-Add-bdev-support-for-HSAK.patch
+Patch19: 0019-lib-env_dpdk-Add-config-args-for-HSAK.patch
+Patch20: 0020-lib-nvme-Add-nvme-support-for-HSAK.patch
+Patch21: 0021-module-bdev-Add-bdev-module-support-for-HSAK.patch
+Patch22: 0022-use-spdk_nvme_ns_cmd_dataset_management-and-delete-s.patch
+Patch23: 0023-spdk-add-nvme-support-for-HSAK.patch
+Patch24: 0024-Add-CUSE-switch-for-nvme-ctrlr.patch
+Patch25: 0025-Adapt-for-ES3000-serial-vendor-special-opcode-in-CUS.patch
+Patch26: 0026-Fix-race-condition-in-continuous-setup-and-teardown-.patch
+Patch27: 0027-Change-log-level-in-poll-timeout.patch
 
 %define package_version %{version}-%{release}
 
@@ -44,6 +55,8 @@ BuildRequires: gcc gcc-c++ make
 BuildRequires: dpdk-devel, numactl-devel, ncurses-devel
 BuildRequires: libiscsi-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires: libibverbs-devel, librdmacm-devel
+BuildRequires: fuse3, fuse3-devel
+BuildRequires: libboundscheck
 %if %{with doc}
 BuildRequires: doxygen mscgen graphviz
 %endif
@@ -51,6 +64,7 @@ BuildRequires: doxygen mscgen graphviz
 # Install dependencies
 Requires: dpdk >= 21.11, numactl-libs, openssl-libs
 Requires: libiscsi, libaio, libuuid
+Requires: fuse3, libboundscheck
 # NVMe over Fabrics
 Requires: librdmacm, librdmacm
 Requires(post): /sbin/ldconfig
@@ -113,7 +127,9 @@ BuildArch: noarch
 	--with-rdma \
 	--with-shared \
 	--with-iscsi-initiator \
-	--without-vtune
+	--without-vtune \
+	--enable-raw \
+	--with-nvme-cuse
 
 make -j`nproc` all
 
@@ -123,6 +139,13 @@ make -C doc
 
 %install
 %make_install -j`nproc` prefix=%{_usr} libdir=%{_libdir} datadir=%{_datadir}
+install -d $RPM_BUILD_ROOT%{_sysconfdir}/spdk
+install -d $RPM_BUILD_ROOT/opt/spdk
+install -d $RPM_BUILD_ROOT/usr/include/spdk_internal
+install -m 0744 ./scripts/setup_self.sh $RPM_BUILD_ROOT/opt/spdk/setup.sh
+install -m 0644 ./etc/spdk/nvme.conf.in $RPM_BUILD_ROOT%{_sysconfdir}/spdk
+install -m 0644 include/spdk_internal/*.h $RPM_BUILD_ROOT/usr/include/spdk_internal
+install -m 0644 lib/nvme/nvme_internal.h $RPM_BUILD_ROOT/usr/include/spdk_internal
 
 # Install tools
 mkdir -p %{install_datadir}
@@ -157,12 +180,18 @@ mv doc/output/html/ %{install_docdir}
 %files
 %{_bindir}/spdk_*
 %{_libdir}/*.so.*
+%dir %{_sysconfdir}/spdk
+%{_sysconfdir}/spdk/nvme.conf.in
+%dir /opt/spdk
+/opt/spdk/setup.sh
 
 
 %files devel
 %{_includedir}/%{name}
 %{_libdir}/*.a
 %{_libdir}/*.so
+%dir /usr/include/spdk_internal
+/usr/include/spdk_internal/*.h
 
 
 %files tools
@@ -177,6 +206,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Tue May 24 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-5
+- Add support for HSAK
+
 * Tue Mar 15 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-4
 - Remove rpath link option, Due to it's easy for attacher to
   construct 'rpath' attacks
