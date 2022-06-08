@@ -1,0 +1,122 @@
+From 1447fa25369f107192be8fa9e5f21ec78f19dcf1 Mon Sep 17 00:00:00 2001
+From: sunshihao <sunshihao@huawei.com>
+Date: Mon, 1 Mar 2021 09:20:10 +0800
+Subject: [PATCH 22/27] use spdk_nvme_ns_cmd_dataset_management and delete
+ spdk_nvme_ns_cmd_unmap_blocks
+
+Signed-off-by: sunshihao520 <sunshihao@huawei.com>
+---
+ include/spdk/nvme.h               | 33 -----------------------------
+ lib/nvme/nvme_ns_cmd.c            | 35 -------------------------------
+ module/bdev/nvme/bdev_nvme_self.c |  8 +++----
+ 3 files changed, 4 insertions(+), 72 deletions(-)
+
+diff --git a/include/spdk/nvme.h b/include/spdk/nvme.h
+index 6393db3..9acfb89 100644
+--- a/include/spdk/nvme.h
++++ b/include/spdk/nvme.h
+@@ -3549,39 +3549,6 @@ bool spdk_nvme_ns_pi_md_start(struct spdk_nvme_ns *ns);
+ bool spdk_nvme_ns_is_dataset_mng_supported(struct spdk_nvme_ns *ns);
+ uint16_t spdk_nvme_get_qpair_id(struct spdk_nvme_qpair *qpair);
+ 
+-/**
+- * Submit a data set management request to the specified NVMe namespace. Data set
+- * management operations are designed to optimize interaction with the block
+- * translation layer inside the device. The most common type of operation is
+- * deallocate, which is often referred to as TRIM or UNMAP.
+- *
+- * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+- * The user must ensure that only one thread submits I/O on a given qpair at any
+- * given time.
+- *
+- * This is a convenience wrapper that will automatically allocate and construct
+- * the correct data buffers. Therefore, ranges does not need to be allocated from
+- * pinned memory and can be placed on the stack. If a higher performance, zero-copy
+- * version of DSM is required, simply build and submit a raw command using
+- * spdk_nvme_ctrlr_cmd_io_raw().
+- *
+- * \param ns NVMe namespace to submit the DSM request
+- * \param type A bit field constructed from \ref spdk_nvme_dsm_attribute.
+- * \param qpair I/O queue pair to submit the request
+- * \param ranges An array of \ref spdk_nvme_dsm_range elements describing the LBAs
+- * to operate on.
+- * \param num_ranges The number of elements in the ranges array.
+- * \param cb_fn Callback function to invoke when the I/O is completed
+- * \param cb_arg Argument to pass to the callback function
+- *
+- * \return 0 if successfully submitted, negated POSIX errno values otherwise.
+- */
+-int spdk_nvme_ns_cmd_unmap_blocks(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+-				  uint32_t type,
+-				  const struct spdk_nvme_dsm_range *ranges,
+-				  uint16_t num_ranges,
+-				  spdk_nvme_cmd_cb cb_fn,
+-				  void *cb_arg);
+ /**
+  * \brief Submits a write I/O to the specified NVMe namespace.
+  *
+diff --git a/lib/nvme/nvme_ns_cmd.c b/lib/nvme/nvme_ns_cmd.c
+index 37dcdc2..9b67b8e 100644
+--- a/lib/nvme/nvme_ns_cmd.c
++++ b/lib/nvme/nvme_ns_cmd.c
+@@ -1221,38 +1221,3 @@ spdk_nvme_ns_cmd_reservation_report(struct spdk_nvme_ns *ns,
+ 
+ 	return nvme_qpair_submit_request(qpair, req);
+ }
+-
+-#ifdef SPDK_CONFIG_APP_RW
+-int
+-spdk_nvme_ns_cmd_unmap_blocks(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+-			      uint32_t type,
+-			      const struct spdk_nvme_dsm_range *ranges, uint16_t num_ranges,
+-			      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+-{
+-	struct nvme_request	*req = NULL;
+-	struct spdk_nvme_cmd	*cmd = NULL;
+-	struct nvme_payload	payload;
+-
+-	if (ranges == NULL) {
+-		return -EINVAL;
+-	}
+-
+-	payload = NVME_PAYLOAD_CONTIG((void *)ranges, NULL);
+-
+-	req = nvme_allocate_request(qpair, &payload, num_ranges * sizeof(struct spdk_nvme_dsm_range),
+-				    0, cb_fn, cb_arg);
+-	if (req == NULL) {
+-		return -ENOMEM;
+-	}
+-
+-	req->user_cb_arg = cb_arg;
+-
+-	cmd = &req->cmd;
+-	cmd->opc = SPDK_NVME_OPC_DATASET_MANAGEMENT;
+-	cmd->nsid = ns->id;
+-
+-	cmd->cdw10 = num_ranges - 1;
+-	cmd->cdw11 = type;
+-
+-	return nvme_qpair_submit_request(qpair, req);
+-}
+diff --git a/module/bdev/nvme/bdev_nvme_self.c b/module/bdev/nvme/bdev_nvme_self.c
+index 7371ecb..1419b1f 100644
+--- a/module/bdev/nvme/bdev_nvme_self.c
++++ b/module/bdev/nvme/bdev_nvme_self.c
+@@ -565,10 +565,10 @@ bdev_nvme_unmap_blocks(struct nvme_bdev *nbdev, struct spdk_io_channel *ch, void
+ 	}
+ 
+ 	spdk_bdev_set_io_location(driver_ctx, (uint8_t)LOCAL_LIBSTORAGE_BDEV_NVME);
+-	return spdk_nvme_ns_cmd_unmap_blocks(nbdev->nvme_ns->ns, nvme_ch->qpair,
+-					     SPDK_NVME_DSM_ATTR_DEALLOCATE,
+-					     unmap_d, unmap_count,
+-					     bdev_nvme_queued_done, driver_ctx);
++	return spdk_nvme_ns_cmd_dataset_management(nbdev->nvme_ns->ns, nvme_ch->qpair,
++						   SPDK_NVME_DSM_ATTR_DEALLOCATE,
++						   unmap_d, unmap_count,
++						   bdev_nvme_queued_done, driver_ctx);
+ }
+ 
+ void
+-- 
+2.33.0
+

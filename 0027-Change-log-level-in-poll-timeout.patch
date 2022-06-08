@@ -1,0 +1,28 @@
+From 5f8b5846741c965b1b5ad7a8ca2960b20565d192 Mon Sep 17 00:00:00 2001
+From: suweifeng <suweifeng1@huawei.com>
+Date: Thu, 10 Jun 2021 11:25:17 +0800
+Subject: [PATCH 27/27] Change log level in poll timeout
+
+Change to 'NOTICE' log level in poll timeout
+
+Signed-off-by: suweifeng <suweifeng1@huawei.com>
+---
+ module/bdev/nvme/bdev_nvme_self.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/module/bdev/nvme/bdev_nvme_self.c b/module/bdev/nvme/bdev_nvme_self.c
+index dc480ff..cba129e 100644
+--- a/module/bdev/nvme/bdev_nvme_self.c
++++ b/module/bdev/nvme/bdev_nvme_self.c
+@@ -36,7 +36,7 @@ void bdev_update_ch_timeout(struct nvme_bdev_poll_group *group)
+ 			poll_time = (poll_ticks * 1000ULL) / spdk_get_ticks_hz();
+ 			if (poll_time >= g_polltime_threshold) {
+ 				group->num_poll_timeout++;
+-				SPDK_WARNLOG("group[%p] poll timeout in %ldms", group, poll_time);
++				SPDK_NOTICELOG("group[%p] poll timeout in %ldms", group, poll_time);
+ 			}
+ 		}
+ 		group->save_start_ticks = current_ticks;
+-- 
+2.33.0
+

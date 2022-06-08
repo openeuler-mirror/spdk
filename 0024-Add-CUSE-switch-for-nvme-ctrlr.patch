@@ -1,0 +1,55 @@
+From 86162fca6435c4b5d98356f63ae32519fe485f02 Mon Sep 17 00:00:00 2001
+From: suweifeng <suweifeng1@huawei.com>
+Date: Mon, 17 May 2021 16:05:40 +0800
+Subject: [PATCH 24/27] Add CUSE switch for nvme ctrlr
+
+Signed-off-by: suweifeng <suweifeng1@huawei.com>
+---
+ module/bdev/nvme/bdev_nvme.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/module/bdev/nvme/bdev_nvme.c b/module/bdev/nvme/bdev_nvme.c
+index d291646..4f88e4e 100644
+--- a/module/bdev/nvme/bdev_nvme.c
++++ b/module/bdev/nvme/bdev_nvme.c
+@@ -137,6 +137,9 @@ static struct spdk_thread *g_bdev_nvme_init_thread;
+ static struct spdk_poller *g_hotplug_poller;
+ static struct spdk_poller *g_hotplug_probe_poller;
+ static struct spdk_nvme_probe_ctx *g_hotplug_probe_ctx;
++#ifdef SPDK_CONFIG_APP_RW
++bool g_useCUSE = false;
++#endif
+ 
+ static void nvme_ctrlr_populate_namespaces(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr,
+ 		struct nvme_async_probe_ctx *ctx);
+@@ -1694,6 +1697,12 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+ 	}
+ 
+ 	nvme_ctrlr_populate_namespaces(nvme_bdev_ctrlr, NULL);
++#ifdef SPDK_CONFIG_APP_RW
++	/* register CUSE */
++	if (g_useCUSE) {
++		spdk_nvme_cuse_register(ctrlr);
++	}
++#endif
+ 
+ 	free(name);
+ }
+@@ -1720,6 +1729,14 @@ remove_cb(void *cb_ctx, struct spdk_nvme_ctrlr *ctrlr)
+ 		return;
+ 	}
+ 	nvme_bdev_ctrlr->destruct = true;
++
++#ifdef SPDK_CONFIG_APP_RW
++	/* remove CUSE */
++	if (g_useCUSE) {
++		spdk_nvme_cuse_unregister(ctrlr);
++	}
++#endif
++
+ 	pthread_mutex_unlock(&g_bdev_nvme_mutex);
+ 	_nvme_bdev_ctrlr_destruct(nvme_bdev_ctrlr);
+ }
+-- 
+2.33.0
+
