@@ -197,7 +197,7 @@ stronger security.
 * Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-4
 - backport 13 bugfix from upstream
 
-* Thu Jul 13 2021 Xiaokeng Li <lixiaokeng@huawei.com> - 21.01-3
+* Tue Jul 13 2021 Xiaokeng Li <lixiaokeng@huawei.com> - 21.01-3
 - backport bugfix from upstream
 
 * Wed Mar 10 2021 Shihao Sun <sunshihao@huawei.com> - 21.01-2
