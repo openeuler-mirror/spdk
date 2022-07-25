@@ -1,0 +1,45 @@
+From c6239a3dc45a7cb3fa245cdcb5f0641959159714 Mon Sep 17 00:00:00 2001
+From: suweifeng <suweifeng1@huawei.com>
+Date: Thu, 20 May 2021 16:41:01 +0800
+Subject: [PATCH 25/27] Adapt for ES3000 serial vendor special opcode in CUSE
+
+With Huawei ES3000 serial NVMe PCIe SSD, Will send special opcode 0xC0
+to get self-define vendor logs, the data transfer field of opcode didn't
+follow NVMe 1.3/1.4 spec, So treat the opcode as bidirectional.
+All self-define opcode start with 0xC0.
+
+Signed-off-by: suweifeng <suweifeng1@huawei.com>
+---
+ include/spdk/nvme_spec.h | 1 +
+ lib/nvme/nvme_cuse.c     | 3 +++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/include/spdk/nvme_spec.h b/include/spdk/nvme_spec.h
+index ca91c8b..8058ea0 100644
+--- a/include/spdk/nvme_spec.h
++++ b/include/spdk/nvme_spec.h
+@@ -1345,6 +1345,7 @@ enum spdk_nvme_admin_opcode {
+ 	SPDK_NVME_OPC_SANITIZE				= 0x84,
+ 
+ 	SPDK_NVME_OPC_GET_LBA_STATUS			= 0x86,
++	SPDK_NVME_OPC_VENDOR				= 0xC0,
+ };
+ 
+ /**
+diff --git a/lib/nvme/nvme_cuse.c b/lib/nvme/nvme_cuse.c
+index 62d1422..3eccfd0 100644
+--- a/lib/nvme/nvme_cuse.c
++++ b/lib/nvme/nvme_cuse.c
+@@ -154,6 +154,9 @@ cuse_nvme_admin_cmd_send(fuse_req_t req, struct nvme_admin_cmd *admin_cmd,
+ 
+ 	ctx->req = req;
+ 	ctx->data_transfer = spdk_nvme_opc_get_data_transfer(admin_cmd->opcode);
++	if (admin_cmd->opcode >= SPDK_NVME_OPC_VENDOR) {
++		ctx->data_transfer = SPDK_NVME_DATA_BIDIRECTIONAL;
++	}
+ 
+ 	memset(&ctx->nvme_cmd, 0, sizeof(ctx->nvme_cmd));
+ 	ctx->nvme_cmd.opc = admin_cmd->opcode;
+-- 
+2.33.0
+

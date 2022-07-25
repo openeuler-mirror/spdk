@@ -1,0 +1,176 @@
+From c359ae7d0ee0593b032f2e2543442fa9f6df3827 Mon Sep 17 00:00:00 2001
+From: sunshihao <sunshihao@huawei.com>
+Date: Mon, 22 Feb 2021 19:58:17 +0800
+Subject: [PATCH 19/27] lib/env_dpdk: Add config args for HSAK
+
+Signed-off-by: sunshihao <sunshihao@huawei.com>
+---
+ lib/env_dpdk/init.c              |  7 +++++++
+ lib/event/reactor.c              | 36 +++++++++++++++++++++++++++++---
+ lib/jsonrpc/jsonrpc_internal.h   |  2 +-
+ lib/jsonrpc/jsonrpc_server_tcp.c |  4 ++--
+ 4 files changed, 43 insertions(+), 6 deletions(-)
+
+diff --git a/lib/env_dpdk/init.c b/lib/env_dpdk/init.c
+index e6464c9..3bb713d 100644
+--- a/lib/env_dpdk/init.c
++++ b/lib/env_dpdk/init.c
+@@ -398,6 +398,13 @@ build_eal_cmdline(const struct spdk_env_opts *opts)
+ 
+ #ifdef __linux__
+ 
++#ifdef SPDK_CONFIG_APP_RW
++	/* set IOVA use phys addr and keep same with DPDK16.11 */
++	args = push_arg(args, &argcount, _sprintf_alloc("--iova-mode=pa"));
++	if (args == NULL) {
++		return -1;
++	}
++#endif
+ 	if (opts->iova_mode) {
+ 		args = push_arg(args, &argcount, _sprintf_alloc("--iova-mode=%s", opts->iova_mode));
+ 		if (args == NULL) {
+diff --git a/lib/event/reactor.c b/lib/event/reactor.c
+index 724371c..9fb9e0f 100644
+--- a/lib/event/reactor.c
++++ b/lib/event/reactor.c
+@@ -42,6 +42,8 @@
+ #include "spdk/util.h"
+ #include "spdk/string.h"
+ #include "spdk/fd_group.h"
++#include "spdk_internal/thread.h"
++#include "spdk/conf.h"
+ 
+ #ifdef __linux__
+ #include <sys/prctl.h>
+@@ -54,6 +56,10 @@
+ 
+ #define SPDK_EVENT_BATCH_SIZE		8
+ 
++#ifdef SPDK_CONFIG_APP_RW
++struct spdk_iodev_thread_info lcore_thread_info[RTE_MAX_LCORE];
++#endif
++
+ static struct spdk_reactor *g_reactors;
+ static uint32_t g_reactor_count;
+ static struct spdk_cpuset g_reactor_core_mask;
+@@ -62,6 +68,7 @@ static enum spdk_reactor_state	g_reactor_state = SPDK_REACTOR_STATE_UNINITIALIZE
+ static bool g_framework_context_switch_monitor_enabled = true;
+ 
+ static struct spdk_mempool *g_spdk_event_mempool = NULL;
++static int16_t g_reactor_batch_size = SPDK_EVENT_BATCH_SIZE;
+ 
+ TAILQ_HEAD(, spdk_scheduler) g_scheduler_list
+ 	= TAILQ_HEAD_INITIALIZER(g_scheduler_list);
+@@ -250,6 +257,20 @@ spdk_reactors_init(void)
+ 	uint32_t i, current_core;
+ 	char mempool_name[32];
+ 
++#ifdef SPDK_CONFIG_APP_RW
++	struct spdk_conf_section *sp;
++	sp = spdk_conf_find_section(NULL, "Reactor");
++	if (sp != 0) {
++		g_reactor_batch_size = spdk_conf_section_get_intval(sp, "BatchSize");
++		if (g_reactor_batch_size <= 0 || g_reactor_batch_size > SPDK_EVENT_BATCH_SIZE) {
++			g_reactor_batch_size = SPDK_EVENT_BATCH_SIZE;
++		}
++		syslog(LOG_INFO,"BatchSize is set to %d\n", g_reactor_batch_size);
++	} else {
++		SPDK_ERRLOG("config file does not contain [Reactor] section, which need to be provided\n");
++	}
++#endif
++
+ 	snprintf(mempool_name, sizeof(mempool_name), "evtpool_%d", getpid());
+ 	g_spdk_event_mempool = spdk_mempool_create(mempool_name,
+ 			       262144 - 1, /* Power of 2 minus 1 is optimal for memory consumption */
+@@ -557,7 +578,7 @@ event_queue_run_batch(struct spdk_reactor *reactor)
+ 			return -errno;
+ 		}
+ 
+-		count = spdk_ring_dequeue(reactor->events, events, SPDK_EVENT_BATCH_SIZE);
++		count = spdk_ring_dequeue(reactor->events, events, g_reactor_batch_size);
+ 
+ 		if (spdk_ring_count(reactor->events) != 0) {
+ 			/* Trigger new notification if there are still events in event-queue waiting for processing. */
+@@ -568,7 +589,7 @@ event_queue_run_batch(struct spdk_reactor *reactor)
+ 			}
+ 		}
+ 	} else {
+-		count = spdk_ring_dequeue(reactor->events, events, SPDK_EVENT_BATCH_SIZE);
++		count = spdk_ring_dequeue(reactor->events, events, g_reactor_batch_size);
+ 	}
+ 
+ 	if (count == 0) {
+@@ -948,6 +969,9 @@ reactor_run(void *arg)
+ 		}
+ 
+ 		if (g_reactor_state != SPDK_REACTOR_STATE_RUNNING) {
++#ifdef SPDK_CONFIG_APP_RW
++			lcore_thread_info[reactor->lcore].state = SPDK_THREAD_STATE_EXITED;
++#endif
+ 			break;
+ 		}
+ 	}
+@@ -1039,11 +1063,16 @@ spdk_reactors_start(void)
+ 			spdk_cpuset_zero(&tmp_cpumask);
+ 			spdk_cpuset_set_cpu(&tmp_cpumask, i, true);
+ 
++#ifdef SPDK_CONFIG_APP_RW
++			lcore_thread_info[reactor->lcore].thread = spdk_thread_create(thread_name, &tmp_cpumask);
++			lcore_thread_info[reactor->lcore].state = SPDK_THREAD_STATE_RUNNING;
++#else
+ 			spdk_thread_create(thread_name, &tmp_cpumask);
++#endif
+ 		}
+ 		spdk_cpuset_set_cpu(&g_reactor_core_mask, i, true);
+ 	}
+-
++#ifndef SPDK_CONFIG_APP_RW
+ 	/* Start the main reactor */
+ 	reactor = spdk_reactor_get(current_core);
+ 	assert(reactor != NULL);
+@@ -1052,6 +1081,7 @@ spdk_reactors_start(void)
+ 	spdk_env_thread_wait_all();
+ 
+ 	g_reactor_state = SPDK_REACTOR_STATE_SHUTDOWN;
++#endif
+ }
+ 
+ void
+diff --git a/lib/jsonrpc/jsonrpc_internal.h b/lib/jsonrpc/jsonrpc_internal.h
+index 4e5852e..331ee00 100644
+--- a/lib/jsonrpc/jsonrpc_internal.h
++++ b/lib/jsonrpc/jsonrpc_internal.h
+@@ -40,7 +40,7 @@
+ 
+ #include "spdk/log.h"
+ 
+-#define SPDK_JSONRPC_RECV_BUF_SIZE	(32 * 1024)
++#define SPDK_JSONRPC_RECV_BUF_SIZE	(4 * 1024 * 1024)
+ #define SPDK_JSONRPC_SEND_BUF_SIZE_INIT	(32 * 1024)
+ #define SPDK_JSONRPC_SEND_BUF_SIZE_MAX	(32 * 1024 * 1024)
+ #define SPDK_JSONRPC_ID_MAX_LEN		128
+diff --git a/lib/jsonrpc/jsonrpc_server_tcp.c b/lib/jsonrpc/jsonrpc_server_tcp.c
+index 71f3b5c..5173aea 100644
+--- a/lib/jsonrpc/jsonrpc_server_tcp.c
++++ b/lib/jsonrpc/jsonrpc_server_tcp.c
+@@ -319,7 +319,7 @@ jsonrpc_server_conn_recv(struct spdk_jsonrpc_server_conn *conn)
+ 		}
+ 
+ 		offset += rc;
+-	} while (rc > 0);
++	} while (rc > 1000);
+ 
+ 	if (offset > 0) {
+ 		/*
+@@ -375,7 +375,7 @@ more:
+ 				return 0;
+ 			}
+ 
+-			SPDK_DEBUGLOG(rpc, "send() failed: %s\n", spdk_strerror(errno));
++			SPDK_ERRLOG("send() failed: %s\n", spdk_strerror(errno));
+ 			return -1;
+ 		}
+ 
+-- 
+2.33.0
+

@@ -1,0 +1,1651 @@
+From fa58cf908e76613a4c9ea84bc96c83bd92354822 Mon Sep 17 00:00:00 2001
+From: sunshihao <sunshihao@huawei.com>
+Date: Mon, 1 Mar 2021 10:59:02 +0800
+Subject: [PATCH 23/27] spdk: add nvme support for HSAK
+
+Signed-off-by: sunshihao <sunshihao@huawei.com>
+---
+ configure                         |   2 +-
+ include/spdk/bdev.h               |   7 +-
+ include/spdk/bdev_module.h        |   4 +-
+ include/spdk/nvme.h               |  51 +--------
+ include/spdk/thread.h             |   2 +
+ lib/bdev/bdev.c                   |  53 +++++++---
+ lib/bdev/bdev_self.c              |  36 +++----
+ lib/env_dpdk/env.mk               |   2 +-
+ lib/env_dpdk/init.c               |   8 +-
+ lib/event/reactor.c               |  13 +--
+ lib/nvme/nvme.c                   |  35 +++----
+ lib/nvme/nvme_ctrlr.c             |  33 ++++--
+ lib/nvme/nvme_ctrlr_cmd.c         |  33 +++---
+ lib/nvme/nvme_ctrlr_self.c        |   3 +
+ lib/nvme/nvme_internal.h          |   5 +-
+ lib/nvme/nvme_ns_cmd.c            |   2 +-
+ lib/nvme/nvme_pcie.c              |   6 +-
+ lib/nvme/nvme_pcie_common.c       |  12 ++-
+ lib/nvme/nvme_qpair.c             |  13 +--
+ lib/nvme/nvme_uevent.h            |   2 -
+ lib/thread/thread.c               |  21 ++--
+ mk/spdk.common.mk                 |   2 +-
+ module/bdev/nvme/bdev_nvme.c      |  50 +++++----
+ module/bdev/nvme/bdev_nvme_self.c | 167 ++++++++++++------------------
+ module/bdev/nvme/bdev_nvme_self.h |   2 +-
+ module/bdev/nvme/common.h         |   1 +
+ scripts/setup_self.sh             |  11 +-
+ 27 files changed, 279 insertions(+), 297 deletions(-)
+
+diff --git a/configure b/configure
+index 964322e..01db27a 100644
+--- a/configure
++++ b/configure
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env bash
++#!/bin/bash
+ 
+ set -e
+ 
+diff --git a/include/spdk/bdev.h b/include/spdk/bdev.h
+index d0284d9..5f30340 100644
+--- a/include/spdk/bdev.h
++++ b/include/spdk/bdev.h
+@@ -862,7 +862,7 @@ int spdk_bdev_read_blocks(struct spdk_bdev_desc *desc, struct spdk_io_channel *c
+  *   * -ENOMEM - spdk_bdev_io buffer cannot be allocated
+  */
+ int spdk_bdev_read_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+-				  void *buf, void *md, int64_t offset_blocks, uint64_t num_blocks,
++				  void *buf, void *md, uint64_t offset_blocks, uint64_t num_blocks,
+ 				  spdk_bdev_io_completion_cb cb, void *cb_arg);
+ 
+ /**
+@@ -1410,12 +1410,13 @@ int spdk_bdev_unmap(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+  * negated errno on failure, in which case the callback will not be called.
+  */
+ int spdk_bdev_unmap_multiblocks(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+-				void *unmap_d, uint16_t unmap_count,
++				void *unmap_d, uint32_t unmap_count,
+ 				spdk_bdev_io_completion_cb cb, void *cb_arg);
+ 
+ void *spdk_bdev_get_channel_group(struct spdk_io_channel *io_ch);
+ void *spdk_bdev_io_get_pool(size_t nbytes);
+-bool spdk_bdev_have_io_in_channel(struct spdk_io_channel *bdevIoCh);
++bool spdk_bdev_have_io_in_channel(struct spdk_io_channel *io_ch);
++int spdk_bdev_get_channel_state(struct spdk_io_channel *io_ch);
+ #endif
+ 
+ /**
+diff --git a/include/spdk/bdev_module.h b/include/spdk/bdev_module.h
+index 55dc980..e901e14 100644
+--- a/include/spdk/bdev_module.h
++++ b/include/spdk/bdev_module.h
+@@ -267,8 +267,10 @@ enum reqLocation_E {
+ };
+ 
+ void spdk_bdev_nvme_remove_cb(void *cb_ctx, void *ctrlr);
+-void spdk_bdev_fail_ctrlr(const char *traddr);
++void spdk_bdev_fail_ctrlr(void *cb_ctx, void *ctrlr);
++struct spdk_nvme_ctrlr *spdk_nvme_bdev_ctrlr_get(char *trid);
+ void *nvme_channel_get_group(void *io_ch);
++int nvme_channel_get_state(void *io_ch);
+ #endif
+ 
+ /** bdev I/O completion status */
+diff --git a/include/spdk/nvme.h b/include/spdk/nvme.h
+index 9acfb89..fb2e5f9 100644
+--- a/include/spdk/nvme.h
++++ b/include/spdk/nvme.h
+@@ -3495,7 +3495,7 @@ bool spdk_nvme_ctrlr_is_format_supported(struct spdk_nvme_ctrlr *ctrlr);
+ bool spdk_nvme_ctrlr_is_format_all_ns(struct spdk_nvme_ctrlr *ctrlr);
+ bool spdk_nvme_ctrlr_is_directive_supported(struct spdk_nvme_ctrlr *ctrlr);
+ bool spdk_nvme_ctrlr_is_streams_supported(struct spdk_nvme_ctrlr *ctrlr);
+-int32_t spdk_nvme_ctrlr_identify_directives(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
++int32_t spdk_nvme_ctrlr_identify_directives(struct spdk_nvme_ctrlr *ctrlr, uint16_t nsid,
+ 		void *payload);
+ int32_t spdk_nvme_ctrlr_enable_streams(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid);
+ int32_t spdk_nvme_ctrlr_ret_streams_param(struct spdk_nvme_ctrlr *ctrlr, void *payload);
+@@ -3523,58 +3523,13 @@ int spdk_bdev_nvme_create_self(struct spdk_nvme_transport_id *trid, const char *
+ 			       const char **names, size_t *count, const char *hostnqn);
+ 
+ int spdk_nvme_detach_ublock(struct spdk_nvme_ctrlr *ctrlr);
+-void spdk_nvme_ctrlr_update_unvmcap(struct spdk_nvme_ctrlr *ctrlr);
+-
+-#define SPDK_NVME_UEVENT_SUBSYSTEM_UIO 1
+-#define SPDK_NVME_UEVENT_SUBSYSTEM_NVME 2
+-
+-enum spdk_nvme_uevent_action {
+-	SPDK_NVME_UEVENT_ADD = 0,
+-	SPDK_NVME_UEVENT_REMOVE = 1,
+-};
+-
+-struct spdk_uevent {
+-	/* remove or add */
+-	enum spdk_nvme_uevent_action action;
+-	int subsystem;
+-	/* pci address of device */
+-	char traddr[SPDK_NVMF_TRADDR_MAX_LEN + 1];
+-};
+-
+-int nvme_uevent_connect(void);
+-int nvme_get_uevent(int fd, struct spdk_uevent *uevent);
+-int nvme_get_uevent_block(int fd, struct spdk_uevent *uevent);
+ int32_t spdk_rebind_driver(char *pci_addr, char *driver_name);
++void spdk_nvme_ctrlr_update_unvmcap(struct spdk_nvme_ctrlr *ctrlr);
++void spdk_nvme_ctrlr_fail_hotplug(struct spdk_nvme_ctrlr *ctrlr);
+ bool spdk_nvme_ns_pi_md_start(struct spdk_nvme_ns *ns);
+ bool spdk_nvme_ns_is_dataset_mng_supported(struct spdk_nvme_ns *ns);
+ uint16_t spdk_nvme_get_qpair_id(struct spdk_nvme_qpair *qpair);
+ 
+-/**
+- * \brief Submits a write I/O to the specified NVMe namespace.
+- *
+- * \param ns NVMe namespace to submit the write I/O
+- * \param qpair I/O queue pair to submit the request
+- * \param lba starting LBA to write the data
+- * \param lba_count length (in sectors) for the write operation
+- * \param streamId The stream id for write I/O
+- * \param cb_fn callback function to invoke when the I/O is completed
+- * \param cb_arg argument to pass to the callback function
+- * \param io_flags set flags, defined in nvme_spec.h, for this I/O
+- * \param reset_sgl_fn callback function to reset scattered payload
+- * \param next_sge_fn callback function to iterate each scattered
+- * payload memory segment
+- *
+- * \return 0 if successfully submitted, ENOMEM if an nvme_request
+- *	     structure cannot be allocated for the I/O request
+- *
+- * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+- * The user must ensure that only one thread submits I/O on a given qpair at any given time.
+- */
+-int spdk_nvme_ns_cmd_writev_stream(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+-				   uint64_t lba, uint32_t lba_count, uint16_t streamId,
+-				   spdk_nvme_cmd_cb cb_fn, void *cb_arg, uint32_t io_flags,
+-				   spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
+-				   spdk_nvme_req_next_sge_cb next_sge_fn);
+ #endif
+ 
+ /*
+diff --git a/include/spdk/thread.h b/include/spdk/thread.h
+index 7c52433..9fea1bd 100644
+--- a/include/spdk/thread.h
++++ b/include/spdk/thread.h
+@@ -73,6 +73,8 @@ void spdk_reactors_use(bool useOrNot);
+ bool spdk_get_reactor_type(void);
+ 
+ void spdk_set_thread_exited(struct spdk_thread *thread);
++
++uint32_t spdk_get_channel_ref(void *io_ch);
+ #endif
+ 
+ /**
+diff --git a/lib/bdev/bdev.c b/lib/bdev/bdev.c
+index 1d8ce99..6daaef9 100644
+--- a/lib/bdev/bdev.c
++++ b/lib/bdev/bdev.c
+@@ -1546,7 +1546,11 @@ void
+ spdk_bdev_module_finish_done(void)
+ {
+ 	if (spdk_get_thread() != g_fini_thread) {
++#ifndef SPDK_CONFIG_APP_RW
+ 		spdk_thread_send_msg(g_fini_thread, bdev_module_finish_iter, NULL);
++#else
++		bdev_module_finish_iter(NULL);
++#endif
+ 	} else {
+ 		bdev_module_finish_iter(NULL);
+ 	}
+@@ -3096,10 +3100,12 @@ bdev_channel_destroy(void *io_device, void *ctx_buf)
+ 	SPDK_DEBUGLOG(bdev, "Destroying channel %p for bdev %s on thread %p\n", ch, ch->bdev->name,
+ 		      spdk_get_thread());
+ 
++#ifndef SPDK_CONFIG_APP_RW
+ 	/* This channel is going away, so add its statistics into the bdev so that they don't get lost. */
+ 	pthread_mutex_lock(&ch->bdev->internal.mutex);
+ 	bdev_io_stat_add(&ch->bdev->internal.stat, &ch->stat);
+ 	pthread_mutex_unlock(&ch->bdev->internal.mutex);
++#endif
+ 
+ 	mgmt_ch = shared_resource->mgmt_ch;
+ 
+@@ -3592,7 +3598,7 @@ bdev_build_contig_io(uint8_t type, void *buf, void *md_buf, uint64_t offset_bloc
+ 
+ static int
+ bdev_read_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, void *buf,
+-			 void *md_buf, int64_t offset_blocks, uint64_t num_blocks,
++			 void *md_buf, uint64_t offset_blocks, uint64_t num_blocks,
+ 			 spdk_bdev_io_completion_cb cb, void *cb_arg)
+ {
+ 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+@@ -3656,20 +3662,22 @@ spdk_bdev_read_blocks(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+ 
+ int
+ spdk_bdev_read_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+-			      void *buf, void *md_buf, int64_t offset_blocks, uint64_t num_blocks,
++			      void *buf, void *md_buf, uint64_t offset_blocks, uint64_t num_blocks,
+ 			      spdk_bdev_io_completion_cb cb, void *cb_arg)
+ {
++#ifndef SPDK_CONFIG_APP_RW
+ 	struct iovec iov = {
+ 		.iov_base = buf,
+ 	};
+-#ifndef SPDK_CONFIG_APP_RW
++
+ 	if (!spdk_bdev_is_md_separate(spdk_bdev_desc_get_bdev(desc))) {
+ 		return -EINVAL;
+ 	}
+-#endif
++
+ 	if (!_bdev_io_check_md_buf(&iov, md_buf)) {
+ 		return -EINVAL;
+ 	}
++#endif
+ 
+ 	return bdev_read_blocks_with_md(desc, ch, buf, md_buf, offset_blocks, num_blocks,
+ 					cb, cb_arg);
+@@ -3835,19 +3843,19 @@ spdk_bdev_write_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_chann
+ 			       void *buf, void *md_buf, uint64_t offset_blocks, uint64_t num_blocks,
+ 			       spdk_bdev_io_completion_cb cb, void *cb_arg)
+ {
++#ifndef SPDK_CONFIG_APP_RW
+ 	struct iovec iov = {
+ 		.iov_base = buf,
+ 	};
+ 
+-#ifndef SPDK_CONFIG_APP_RW
+ 	if (!spdk_bdev_is_md_separate(spdk_bdev_desc_get_bdev(desc))) {
+ 		return -EINVAL;
+ 	}
+-#endif
++
+ 	if (!_bdev_io_check_md_buf(&iov, md_buf)) {
+ 		return -EINVAL;
+ 	}
+-
++#endif
+ 	return bdev_write_blocks_with_md(desc, ch, buf, md_buf, offset_blocks, num_blocks,
+ 					 cb, cb_arg);
+ }
+@@ -5158,12 +5166,14 @@ bdev_io_complete(void *ctx)
+ 			bdev_io->internal.io_submit_ch = NULL;
+ 		}
+ 
++		if (bdev_io->internal.in_submit_request) {
++			bdev_io->internal.in_submit_request = false;
++		}
+ 		/*
+ 		 * Defer completion to avoid potential infinite recursion if the
+ 		 * user's completion callback issues a new I/O.
+ 		 */
+-		spdk_thread_send_msg(spdk_bdev_io_get_thread(bdev_io),
+-				     bdev_io_complete, bdev_io);
++		bdev_io_complete(bdev_io);
+ 		return;
+ 	}
+ 
+@@ -5214,7 +5224,7 @@ bdev_io_complete(void *ctx)
+ 			break;
+ 		}
+ #ifdef SPDK_CONFIG_APP_RW
+-		bdev_io_stat_update(bdev_io, tsc, &bdev_io->internal.ch->stat);
++		bdev_io_stat_update(bdev_io, tsc_diff, &bdev_io->internal.ch->stat);
+ #endif
+ 	}
+ 
+@@ -5647,10 +5657,12 @@ bdev_start(struct spdk_bdev *bdev)
+ 	SPDK_DEBUGLOG(bdev, "Inserting bdev %s into list\n", bdev->name);
+ 	TAILQ_INSERT_TAIL(&g_bdev_mgr.bdevs, bdev, internal.link);
+ 
++#ifndef SPDK_CONFIG_APP_RW
+ 	/* Examine configuration before initializing I/O */
+ 	bdev_examine(bdev);
+ 
+ 	spdk_bdev_wait_for_examine(bdev_start_finished, bdev);
++#endif
+ }
+ 
+ int
+@@ -5729,7 +5741,14 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
+ 		 */
+ 		desc->refs++;
+ 		pthread_mutex_unlock(&desc->mutex);
+-		spdk_thread_send_msg(desc->thread, _remove_notify, desc);
++	}
++
++	TAILQ_FOREACH_SAFE(desc, &bdev->internal.open_descs, link, tmp) {
++		pthread_mutex_unlock(&bdev->internal.mutex);
++		pthread_mutex_unlock(&g_bdev_mgr.mutex);
++		_remove_notify(desc);
++		pthread_mutex_lock(&bdev->internal.mutex);
++		pthread_mutex_lock(&g_bdev_mgr.mutex);
+ 	}
+ 
+ 	/* If there are no descriptors, proceed removing the bdev */
+@@ -5794,7 +5813,6 @@ static int
+ bdev_start_qos(struct spdk_bdev *bdev)
+ {
+ 	struct set_qos_limit_ctx *ctx;
+-
+ 	/* Enable QoS */
+ 	if (bdev->internal.qos && bdev->internal.qos->thread == NULL) {
+ 		ctx = calloc(1, sizeof(*ctx));
+@@ -6010,7 +6028,6 @@ spdk_bdev_close(struct spdk_bdev_desc *desc)
+ 	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING && TAILQ_EMPTY(&bdev->internal.open_descs)) {
+ 		rc = bdev_unregister_unsafe(bdev);
+ 		pthread_mutex_unlock(&bdev->internal.mutex);
+-
+ 		if (rc == 0) {
+ 			bdev_fini(bdev);
+ 		}
+@@ -7054,6 +7071,16 @@ spdk_bdev_get_channel_group(struct spdk_io_channel *io_ch)
+ 	return nvme_channel_get_group(nvme_io_ch);
+ }
+ 
++int
++spdk_bdev_get_channel_state(struct spdk_io_channel *io_ch)
++{
++	struct spdk_bdev_channel *ch = spdk_io_channel_get_ctx(io_ch);
++	struct spdk_io_channel *under_io_ch = ch->channel;
++	void *nvme_io_ch = spdk_io_channel_get_ctx(under_io_ch);
++
++	return nvme_channel_get_state(nvme_io_ch);
++}
++
+ bool
+ spdk_bdev_have_io_in_channel(struct spdk_io_channel *io_ch)
+ {
+diff --git a/lib/bdev/bdev_self.c b/lib/bdev/bdev_self.c
+index 7050c30..c5b92a3 100644
+--- a/lib/bdev/bdev_self.c
++++ b/lib/bdev/bdev_self.c
+@@ -30,10 +30,8 @@ struct libstorage_bdev_io_stat *g_io_stat_map;
+ int32_t g_libstorage_iostat = 0;
+ int32_t g_polltime_threshold = 0;
+ 
+-void
+-spdk_bdev_init_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
+-		      struct spdk_io_channel *io_ch,
+-		      struct spdk_bdev_io_stat *stat)
++void spdk_bdev_init_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
++			   struct spdk_io_channel *io_ch, struct spdk_bdev_io_stat *stat)
+ {
+ 	int		i = 0;
+ 	bool		find = false;
+@@ -95,9 +93,8 @@ spdk_bdev_init_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
+ 	stat->interval_tsc = spdk_get_ticks_hz() / 10;
+ }
+ 
+-void
+-spdk_bdev_destroy_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
+-			 struct spdk_io_channel *io_ch)
++void spdk_bdev_destroy_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
++			      struct spdk_io_channel *io_ch)
+ {
+ 	int		i = 0;
+ 	uint16_t	channel_id;
+@@ -127,10 +124,9 @@ spdk_bdev_destroy_iostat(struct spdk_bdev_channel *ch, struct spdk_bdev *bdev,
+ 	}
+ }
+ 
+-int
+-spdk_bdev_unmap_multiblocks(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+-			    void *unmap_d, uint16_t unmap_count,
+-			    spdk_bdev_io_completion_cb cb, void *cb_arg)
++int spdk_bdev_unmap_multiblocks(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
++				void *unmap_d, uint32_t unmap_count,
++				spdk_bdev_io_completion_cb cb, void *cb_arg)
+ {
+ 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+ 	struct spdk_bdev_io *bdev_io = NULL;
+@@ -152,38 +148,38 @@ spdk_bdev_unmap_multiblocks(struct spdk_bdev_desc *desc, struct spdk_io_channel
+ 	return 0;
+ }
+ 
+-void
+-bdev_io_stat_update(struct spdk_bdev_io *bdev_io, uint64_t tsc, struct spdk_bdev_io_stat *stat)
++void bdev_io_stat_update(struct spdk_bdev_io *bdev_io, uint64_t tsc_diff,
++			 struct spdk_bdev_io_stat *stat)
+ {
+ 	switch (bdev_io->type) {
+ 	case SPDK_BDEV_IO_TYPE_READ_NVME:
+ 		stat->bytes_read += bdev_io->u.contig.nbytes + bdev_io->u.contig.md_len;
+ 		stat->num_read_ops++;
+-		stat->read_latency_ticks += (tsc - bdev_io->internal.submit_tsc);
++		stat->read_latency_ticks += tsc_diff;
+ 		break;
+ 	case SPDK_BDEV_IO_TYPE_WRITE_NVME:
+ 		stat->bytes_written += bdev_io->u.contig.nbytes + bdev_io->u.contig.md_len;
+ 		stat->num_write_ops++;
+-		stat->write_latency_ticks += (tsc - bdev_io->internal.submit_tsc);
++		stat->write_latency_ticks += tsc_diff;
+ 		break;
+ 	case SPDK_BDEV_IO_TYPE_READV_NVME:
+ 		stat->bytes_read += bdev_io->u.bdev.nbytes;
+ 		stat->num_read_ops++;
+-		stat->read_latency_ticks += (tsc - bdev_io->internal.submit_tsc);
++		stat->read_latency_ticks += tsc_diff;
+ 		break;
+ 	case SPDK_BDEV_IO_TYPE_WRITEV_NVME:
+ 		stat->bytes_written += bdev_io->u.bdev.nbytes;
+ 		stat->num_write_ops++;
+-		stat->write_latency_ticks += (tsc - bdev_io->internal.submit_tsc);
++		stat->write_latency_ticks += tsc_diff;
+ 		break;
+ 	default:
+ 		break;
+ 	}
+ }
+ 
+-void
+-bdev_update_iostat_map(struct spdk_bdev_io *bdev_io, uint64_t tsc, struct spdk_bdev_io_stat *stat,
+-		       struct spdk_io_channel *channel, uint64_t io_outstanding)
++void bdev_update_iostat_map(struct spdk_bdev_io *bdev_io, uint64_t tsc,
++			    struct spdk_bdev_io_stat *stat,
++			    struct spdk_io_channel *channel, uint64_t io_outstanding)
+ {
+ 	uint64_t	num_poll_timeout;
+ 
+diff --git a/lib/env_dpdk/env.mk b/lib/env_dpdk/env.mk
+index 292dd91..1e4f63c 100644
+--- a/lib/env_dpdk/env.mk
++++ b/lib/env_dpdk/env.mk
+@@ -120,7 +120,7 @@ endif
+ endif
+ 
+ DPDK_SHARED_LIB = $(DPDK_LIB_LIST:%=$(DPDK_ABS_DIR)/lib/lib%.so)
+-DPDK_STATIC_LIB = $(DPDK_LIB_LIST:%=$(DPDK_ABS_DIR)/lib/lib%.a)
++DPDK_STATIC_LIB = $(DPDK_LIB_LIST:%=/usr/lib64/lib%.a)
+ DPDK_SHARED_LIB_LINKER_ARGS = $(call add_no_as_needed,$(DPDK_SHARED_LIB))
+ DPDK_STATIC_LIB_LINKER_ARGS = $(call add_whole_archive,$(DPDK_STATIC_LIB))
+ 
+diff --git a/lib/env_dpdk/init.c b/lib/env_dpdk/init.c
+index 3bb713d..1c18a8b 100644
+--- a/lib/env_dpdk/init.c
++++ b/lib/env_dpdk/init.c
+@@ -561,12 +561,12 @@ spdk_env_init(const struct spdk_env_opts *opts)
+ 		return -EINVAL;
+ 	}
+ 
+-	SPDK_PRINTF("Starting %s / %s initialization...\n", SPDK_VERSION_STRING, rte_version());
+-	SPDK_PRINTF("[ DPDK EAL parameters: ");
++	printf("Starting %s / %s initialization...\n", SPDK_VERSION_STRING, rte_version());
++	printf("[ DPDK EAL parameters: ");
+ 	for (i = 0; i < g_eal_cmdline_argcount; i++) {
+-		SPDK_PRINTF("%s ", g_eal_cmdline[i]);
++		printf("%s ", g_eal_cmdline[i]);
+ 	}
+-	SPDK_PRINTF("]\n");
++	printf("]\n");
+ 
+ 	/* DPDK rearranges the array we pass to it, so make a copy
+ 	 * before passing so we can still free the individual strings
+diff --git a/lib/event/reactor.c b/lib/event/reactor.c
+index 3eb8799..9d92875 100644
+--- a/lib/event/reactor.c
++++ b/lib/event/reactor.c
+@@ -55,6 +55,7 @@
+ #endif
+ 
+ #define SPDK_EVENT_BATCH_SIZE		8
++#define SPDK_EVENT_MAX_BATCH_SIZE	32
+ 
+ #ifdef SPDK_CONFIG_APP_RW
+ struct spdk_iodev_thread_info lcore_thread_info[RTE_MAX_LCORE];
+@@ -262,7 +263,7 @@ spdk_reactors_init(void)
+ 	sp = spdk_conf_find_section(NULL, "Reactor");
+ 	if (sp != 0) {
+ 		g_reactor_batch_size = spdk_conf_section_get_intval(sp, "BatchSize");
+-		if (g_reactor_batch_size <= 0 || g_reactor_batch_size > SPDK_EVENT_BATCH_SIZE) {
++		if (g_reactor_batch_size <= 0 || g_reactor_batch_size > SPDK_EVENT_MAX_BATCH_SIZE) {
+ 			g_reactor_batch_size = SPDK_EVENT_BATCH_SIZE;
+ 		}
+ 		syslog(LOG_INFO, "BatchSize is set to %d\n", g_reactor_batch_size);
+@@ -550,7 +551,7 @@ static inline uint32_t
+ event_queue_run_batch(struct spdk_reactor *reactor)
+ {
+ 	unsigned count, i;
+-	void *events[SPDK_EVENT_BATCH_SIZE];
++	void *events[SPDK_EVENT_MAX_BATCH_SIZE];
+ 	struct spdk_thread *thread;
+ 	struct spdk_lw_thread *lw_thread;
+ 
+@@ -969,9 +970,6 @@ reactor_run(void *arg)
+ 		}
+ 
+ 		if (g_reactor_state != SPDK_REACTOR_STATE_RUNNING) {
+-#ifdef SPDK_CONFIG_APP_RW
+-			lcore_thread_info[reactor->lcore].state = SPDK_THREAD_STATE_EXITED;
+-#endif
+ 			break;
+ 		}
+ 	}
+@@ -1003,7 +1001,10 @@ reactor_run(void *arg)
+ 			}
+ 		}
+ 	}
+-
++#ifdef SPDK_CONFIG_APP_RW
++	/* When all thread in reactor is finish, inform libstorage to release resource. */
++	lcore_thread_info[reactor->lcore].state = SPDK_THREAD_STATE_EXITED;
++#endif
+ 	return 0;
+ }
+ 
+diff --git a/lib/nvme/nvme.c b/lib/nvme/nvme.c
+index fca2f41..b0cc321 100644
+--- a/lib/nvme/nvme.c
++++ b/lib/nvme/nvme.c
+@@ -39,6 +39,7 @@
+ #include "spdk/nvme.h"
+ #include "spdk_internal/debug.h"
+ #include "spdk/bdev_module.h"
++#include <sys/prctl.h>
+ 
+ #define SPDK_NVME_DRIVER_NAME "spdk_nvme_driver"
+ 
+@@ -100,6 +101,9 @@ static void admin_timer_timeout(void)
+ 
+ static void *nvme_ctrlr_run_admin_timer(void *arg)
+ {
++#if defined(__linux__)
++	prctl(PR_SET_NAME, "nvme-admin", 0, 0, 0);
++#endif
+ 	sleep(20);
+ 
+ 	while (1) {
+@@ -561,6 +565,11 @@ nvme_request_check_timeout(struct nvme_request *req, uint16_t cid,
+ 			   struct spdk_nvme_ctrlr_process *active_proc,
+ 			   uint64_t now_tick)
+ {
++	if (req == NULL) {
++		SPDK_WARNLOG("Get invalid req from tracker!\n");
++		return 1;
++	}
++
+ 	struct spdk_nvme_qpair *qpair = req->qpair;
+ 	struct spdk_nvme_ctrlr *ctrlr = qpair->ctrlr;
+ 
+@@ -599,26 +608,16 @@ nvme_request_check_timeout(struct nvme_request *req, uint16_t cid,
+ 				   nvme_qpair_is_admin_queue(qpair) ? NULL : qpair,
+ 				   cid);
+ #else
+-	if (!nvme_qpair_is_admin_queue(qpair) && (req->cmd.opc == SPDK_NVME_OPC_WRITE ||
+-			req->cmd.opc == SPDK_NVME_OPC_READ)) {
+-		SPDK_WARNLOG("IO timeout, OP[%u] NS[%u] LBA[%lu].\n", req->cmd.opc, req->cmd.nsid,
+-			     *(uint64_t *)&req->cmd.cdw10);
+-	} else {
+-		SPDK_WARNLOG("%s Command[%u] timeout.\n", nvme_qpair_is_admin_queue(qpair) ?
+-			     "Admin" : "IO", req->cmd.opc);
+-	}
+-	if (req->timed_out) {
+-		/* Reset the controller if the command was already timed out. */
+-		SPDK_WARNLOG("IO Command[%u] timeout again, reset controller.\n", cid);
+-		active_proc->timeout_cb_fn(active_proc->timeout_cb_arg, ctrlr, NULL, cid);
+-	} else {
++	if (!req->timed_out) {
+ 		req->timed_out = true;
+-		active_proc->timeout_cb_fn(active_proc->timeout_cb_arg, ctrlr,
+-					   nvme_qpair_is_admin_queue(qpair) ? NULL : qpair,
+-					   cid);
+-		/* Timing again. Reset the controller if it times out again */
+-		req->submit_tick = spdk_get_ticks();
++		SPDK_WARNLOG("%s Command[%u] timeout. ctrlr=%p qpair=%p cid=%u\n",
++			     nvme_qpair_is_admin_queue(qpair) ? "Admin" : "IO",
++			     req->cmd.opc, ctrlr, qpair, cid);
+ 	}
++	active_proc->timeout_cb_fn(active_proc->timeout_cb_arg, ctrlr,
++				   nvme_qpair_is_admin_queue(qpair) ? NULL : qpair, cid);
++	/* Update submit tick to reduce timeout num. */
++	req->submit_tick = spdk_get_ticks();
+ #endif
+ 	return 0;
+ }
+diff --git a/lib/nvme/nvme_ctrlr.c b/lib/nvme/nvme_ctrlr.c
+index fa28f07..27468a7 100644
+--- a/lib/nvme/nvme_ctrlr.c
++++ b/lib/nvme/nvme_ctrlr.c
+@@ -34,6 +34,7 @@
+ #include "spdk/stdinc.h"
+ 
+ #include "nvme_internal.h"
++#include "nvme_pcie_internal.h"
+ #include "nvme_io_msg.h"
+ 
+ #include "spdk/env.h"
+@@ -512,7 +513,6 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
+ 	}
+ 
+ 	ctrlr = qpair->ctrlr;
+-
+ 	if (qpair->in_completion_context) {
+ 		/*
+ 		 * There are many cases where it is convenient to delete an io qpair in the context
+@@ -543,12 +543,16 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
+ 	 * exits unexpectedly.  In that case, we must not try to abort any reqs associated
+ 	 * with that qpair, since the callbacks will also be foreign to this process.
+ 	 */
++
++	if (ctrlr == NULL) {
++		return 0;
++	}
++
+ 	if (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr)) {
+ 		nvme_qpair_abort_reqs(qpair, 1);
+ 	}
+ 
+ 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+-
+ 	nvme_ctrlr_proc_remove_io_qpair(qpair);
+ 
+ 	TAILQ_REMOVE(&ctrlr->active_io_qpairs, qpair, tailq);
+@@ -907,6 +911,16 @@ spdk_nvme_ctrlr_fail(struct spdk_nvme_ctrlr *ctrlr)
+ 	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+ }
+ 
++#ifdef SPDK_CONFIG_APP_RW
++void
++spdk_nvme_ctrlr_fail_hotplug(struct spdk_nvme_ctrlr *ctrlr)
++{
++	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
++	nvme_ctrlr_fail(ctrlr, true);
++	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
++}
++#endif
++
+ static void
+ nvme_ctrlr_shutdown_async(struct spdk_nvme_ctrlr *ctrlr,
+ 			  struct nvme_ctrlr_detach_ctx *ctx)
+@@ -1102,7 +1116,6 @@ nvme_ctrlr_disable(struct spdk_nvme_ctrlr *ctrlr)
+ 	return 0;
+ }
+ 
+-#ifdef DEBUG
+ static const char *
+ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
+ {
+@@ -1182,7 +1195,6 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
+ 	}
+ 	return "unknown";
+ };
+-#endif /* DEBUG */
+ 
+ static void
+ nvme_ctrlr_set_state(struct spdk_nvme_ctrlr *ctrlr, enum nvme_ctrlr_state state,
+@@ -1209,12 +1221,12 @@ nvme_ctrlr_set_state(struct spdk_nvme_ctrlr *ctrlr, enum nvme_ctrlr_state state,
+ 	}
+ 
+ 	ctrlr->state_timeout_tsc = timeout_in_ticks + now_ticks;
+-	SPDK_DEBUGLOG(nvme, "setting state to %s (timeout %" PRIu64 " ms)\n",
+-		      nvme_ctrlr_state_string(ctrlr->state), timeout_in_ms);
++	SPDK_NOTICELOG("setting state to %s (timeout %" PRIu64 " ms)\n",
++		       nvme_ctrlr_state_string(ctrlr->state), timeout_in_ms);
+ 	return;
+ inf:
+-	SPDK_DEBUGLOG(nvme, "setting state to %s (no timeout)\n",
+-		      nvme_ctrlr_state_string(ctrlr->state));
++	SPDK_NOTICELOG("setting state to %s (no timeout)\n",
++		       nvme_ctrlr_state_string(ctrlr->state));
+ 	ctrlr->state_timeout_tsc = NVME_TIMEOUT_INFINITE;
+ }
+ 
+@@ -2729,7 +2741,6 @@ struct spdk_nvme_ctrlr_process *
+ nvme_ctrlr_get_process(struct spdk_nvme_ctrlr *ctrlr, pid_t pid)
+ {
+ 	struct spdk_nvme_ctrlr_process	*active_proc;
+-
+ 	TAILQ_FOREACH(active_proc, &ctrlr->active_procs, tailq) {
+ 		if (active_proc->pid == pid) {
+ 			return active_proc;
+@@ -4135,6 +4146,10 @@ spdk_nvme_ctrlr_alloc_qid(struct spdk_nvme_ctrlr *ctrlr)
+ void
+ spdk_nvme_ctrlr_free_qid(struct spdk_nvme_ctrlr *ctrlr, uint16_t qid)
+ {
++	if (ctrlr->free_io_qids == NULL) {
++		return;
++	}
++
+ 	assert(qid <= ctrlr->opts.num_io_queues);
+ 
+ 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+diff --git a/lib/nvme/nvme_ctrlr_cmd.c b/lib/nvme/nvme_ctrlr_cmd.c
+index d335bc6..7a7e625 100644
+--- a/lib/nvme/nvme_ctrlr_cmd.c
++++ b/lib/nvme/nvme_ctrlr_cmd.c
+@@ -581,16 +581,18 @@ nvme_ctrlr_retry_queued_abort(struct spdk_nvme_ctrlr *ctrlr)
+ 		rc = nvme_ctrlr_submit_admin_request(ctrlr, next);
+ 		if (rc < 0) {
+ 			SPDK_ERRLOG("Failed to submit queued abort.\n");
+-#ifndef SPDK_CONFIG_APP_RW
++#ifdef SPDK_CONFIG_APP_RW
++			/* If submit abort fail, free all req in queued aborts */
++			ctrlr->outstanding_aborts--;
++			nvme_free_request(next);
++			goto free;
++#else
+ 			memset(&next->cpl, 0, sizeof(next->cpl));
+ 			next->cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+ 			next->cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+ 			next->cpl.status.dnr = 1;
+ 			nvme_complete_request(next->cb_fn, next->cb_arg, next->qpair, next, &next->cpl);
+ 			nvme_free_request(next);
+-#else
+-			nvme_free_request(next);
+-			break;
+ #endif
+ 		} else {
+ 			/* If the first abort succeeds, stop iterating. */
+@@ -598,17 +600,13 @@ nvme_ctrlr_retry_queued_abort(struct spdk_nvme_ctrlr *ctrlr)
+ 		}
+ 	}
+ 
++	return;
+ #ifdef SPDK_CONFIG_APP_RW
+-	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+-	if (rc < 0) {
+-		/* If abort fail, free all of the queued abort requests */
+-		STAILQ_FOREACH_SAFE(next, &ctrlr->queued_aborts, stailq, tmp) {
+-			STAILQ_REMOVE_HEAD(&ctrlr->queued_aborts, stailq);
+-			nvme_free_request(next);
+-			ctrlr->outstanding_aborts--;
+-		}
++free:
++	STAILQ_FOREACH_SAFE(next, &ctrlr->queued_aborts, stailq, tmp) {
++		STAILQ_REMOVE_HEAD(&ctrlr->queued_aborts, stailq);
++		nvme_free_request(next);
+ 	}
+-	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+ #endif
+ }
+ 
+@@ -635,9 +633,10 @@ nvme_ctrlr_cmd_abort_cpl(void *ctx, const struct spdk_nvme_cpl *cpl)
+ 	ctrlr = req->qpair->ctrlr;
+ 
+ 	ctrlr->outstanding_aborts--;
+-	nvme_ctrlr_retry_queued_abort(ctrlr);
+-
++	/* If abort is failed, just reset the ctrlr. */
+ 	req->user_cb_fn(req->user_cb_arg, cpl);
++
++	nvme_ctrlr_retry_queued_abort(ctrlr);
+ }
+ 
+ int
+@@ -1006,7 +1005,9 @@ nvme_ctrlr_cmd_directive(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
+ 	cmd->opc = opc_type;
+ 	cmd->nsid = nsid;
+ 
+-	cmd->cdw10 = (payload_size >> 2) - 1;
++	if (payload_size != 0) {
++		cmd->cdw10 = (payload_size >> 2) - 1;
++	}
+ 	cmd->cdw11_bits.directive.doper = doper;
+ 	cmd->cdw11_bits.directive.dtype = dtype;
+ 	cmd->cdw11_bits.directive.dspec = dspec;
+diff --git a/lib/nvme/nvme_ctrlr_self.c b/lib/nvme/nvme_ctrlr_self.c
+index 4ac1925..8adabfc 100644
+--- a/lib/nvme/nvme_ctrlr_self.c
++++ b/lib/nvme/nvme_ctrlr_self.c
+@@ -224,5 +224,8 @@ int32_t spdk_nvme_ctrlr_identify_directives(struct spdk_nvme_ctrlr *ctrlr, uint1
+ 
+ uint16_t spdk_nvme_get_qpair_id(struct spdk_nvme_qpair *qpair)
+ {
++	if (qpair == NULL) {
++		return -1;
++	}
+ 	return qpair->id;
+ }
+diff --git a/lib/nvme/nvme_internal.h b/lib/nvme/nvme_internal.h
+index 6934f9f..31328f0 100644
+--- a/lib/nvme/nvme_internal.h
++++ b/lib/nvme/nvme_internal.h
+@@ -457,6 +457,8 @@ struct spdk_nvme_qpair {
+ 	const struct spdk_nvme_transport	*transport;
+ 
+ 	uint8_t					transport_failure_reason: 2;
++
++	uint32_t				disconnected_time;
+ };
+ 
+ struct spdk_nvme_poll_group {
+@@ -1069,10 +1071,9 @@ typedef int (*spdk_nvme_parse_ana_log_page_cb)(
+ 	const struct spdk_nvme_ana_group_descriptor *desc, void *cb_arg);
+ int	nvme_ctrlr_parse_ana_log_page(struct spdk_nvme_ctrlr *ctrlr,
+ 				      spdk_nvme_parse_ana_log_page_cb cb_fn, void *cb_arg);
+-
++bool	nvme_qpair_check_enabled(struct spdk_nvme_qpair *qpair);
+ #ifdef SPDK_CONFIG_APP_RW
+ void	nvme_ctrlr_destruct_ublock(struct spdk_nvme_ctrlr *ctrlr);
+-void	nvme_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
+ #endif
+ 
+ static inline struct nvme_request *
+diff --git a/lib/nvme/nvme_ns_cmd.c b/lib/nvme/nvme_ns_cmd.c
+index 9b67b8e..b8d9a90 100644
+--- a/lib/nvme/nvme_ns_cmd.c
++++ b/lib/nvme/nvme_ns_cmd.c
+@@ -462,7 +462,7 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+ 	uint32_t		sector_size = _nvme_get_host_buffer_sector_size(ns, io_flags);
+ 	uint32_t		sectors_per_max_io = ns->sectors_per_max_io;
+ 	uint32_t		sectors_per_stripe = ns->sectors_per_stripe;
+-	int			rc;
++	int			rc = 0;
+ 
+ 	req = nvme_allocate_request(qpair, payload, lba_count * sector_size, lba_count * ns->md_size,
+ 				    cb_fn, cb_arg);
+diff --git a/lib/nvme/nvme_pcie.c b/lib/nvme/nvme_pcie.c
+index 0e9e24d..1b4b958 100644
+--- a/lib/nvme/nvme_pcie.c
++++ b/lib/nvme/nvme_pcie.c
+@@ -755,9 +755,7 @@ nvme_pcie_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
+ 		spdk_pci_device_unclaim(devhandle);
+ 		spdk_pci_device_detach(devhandle);
+ 	}
+-
+ 	spdk_free(pctrlr);
+-
+ 	return 0;
+ }
+ 
+@@ -1244,6 +1242,10 @@ nvme_pcie_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_reques
+ 	bool			sgl_supported;
+ 	bool			dword_aligned = true;
+ 
++	if (!nvme_qpair_check_enabled(qpair)) {
++		return -EBUSY;
++	}
++
+ 	if (spdk_unlikely(nvme_qpair_is_admin_queue(qpair))) {
+ 		nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+ 	}
+diff --git a/lib/nvme/nvme_pcie_common.c b/lib/nvme/nvme_pcie_common.c
+index 564f81b..1dc9c99 100644
+--- a/lib/nvme/nvme_pcie_common.c
++++ b/lib/nvme/nvme_pcie_common.c
+@@ -840,7 +840,7 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
+ 		if (tr->req) {
+ 			nvme_pcie_qpair_complete_tracker(qpair, tr, cpl, true);
+ 		} else {
+-			SPDK_ERRLOG("cpl does not map to outstanding cmd\n");
++			SPDK_NOTICELOG("cpl does not map to outstanding cmd\n");
+ 			spdk_nvme_qpair_print_completion(qpair, cpl);
+ 			assert(0);
+ 		}
+@@ -905,7 +905,6 @@ nvme_pcie_qpair_destroy(struct spdk_nvme_qpair *qpair)
+ 	nvme_qpair_deinit(qpair);
+ 
+ 	spdk_free(pqpair);
+-
+ 	return 0;
+ }
+ 
+@@ -952,8 +951,6 @@ nvme_pcie_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
+ 	struct nvme_completion_poll_status *status;
+ 	int rc;
+ 
+-	assert(ctrlr != NULL);
+-
+ 	if (ctrlr->is_removed) {
+ 		goto free;
+ 	}
+@@ -1005,6 +1002,7 @@ free:
+ 		nvme_pcie_qpair_abort_trackers(qpair, 1);
+ 	}
+ 
++	nvme_qpair_abort_reqs(qpair, 1);
+ 	nvme_pcie_qpair_destroy(qpair);
+ 	return 0;
+ }
+@@ -1064,6 +1062,11 @@ nvme_pcie_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
+ 		local_completions = spdk_nvme_qpair_process_completions(qpair, completions_per_qpair);
+ 		if (local_completions < 0) {
+ 			disconnected_qpair_cb(qpair, tgroup->group->ctx);
++			qpair->disconnected_time++;
++			if (qpair->disconnected_time > 50) {
++				qpair->poll_group->num_qpairs_to_delete++;
++				qpair->delete_after_completion_context = 1;
++			}
+ 			local_completions = 0;
+ 		}
+ 		total_completions += local_completions;
+@@ -1078,7 +1081,6 @@ nvme_pcie_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
+ 	if (!STAILQ_EMPTY(&tgroup->connected_qpairs) || !STAILQ_EMPTY(&tgroup->disconnected_qpairs)) {
+ 		return -EBUSY;
+ 	}
+-
+ 	free(tgroup);
+ 
+ 	return 0;
+diff --git a/lib/nvme/nvme_qpair.c b/lib/nvme/nvme_qpair.c
+index 3aabd63..f11d070 100644
+--- a/lib/nvme/nvme_qpair.c
++++ b/lib/nvme/nvme_qpair.c
+@@ -600,7 +600,7 @@ nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair, void *cmd_cb_arg)
+ 	return aborting;
+ }
+ 
+-static inline bool
++bool
+ nvme_qpair_check_enabled(struct spdk_nvme_qpair *qpair)
+ {
+ 	struct nvme_request *req;
+@@ -612,8 +612,7 @@ nvme_qpair_check_enabled(struct spdk_nvme_qpair *qpair)
+ 	 * from the old transport connection and encourage the application to retry them. We also need
+ 	 * to submit any queued requests that built up while we were in the connected or enabling state.
+ 	 */
+-	if (nvme_qpair_get_state(qpair) == NVME_QPAIR_CONNECTED && !qpair->ctrlr->is_resetting
+-	    && !qpair->ctrlr->is_removed && !qpair->ctrlr->is_destructed) {
++	if (nvme_qpair_get_state(qpair) == NVME_QPAIR_CONNECTED && !qpair->ctrlr->is_resetting) {
+ 		nvme_qpair_set_state(qpair, NVME_QPAIR_ENABLING);
+ 		/*
+ 		 * PCIe is special, for fabrics transports, we can abort requests before disconnect during reset
+@@ -857,13 +856,7 @@ _nvme_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *r
+ 				rc = nvme_qpair_submit_request(qpair, child_req);
+ 				if (spdk_unlikely(rc != 0)) {
+ 					child_req_failed = true;
+-#ifdef SPDK_CONFIG_APP_RW
+-					if (rc == -ENXIO && child_req->num_children == 0) {
+-						SPDK_WARNLOG("Warning: child req submit failed.\n");
+-						nvme_request_remove_child(req, child_req);
+-						nvme_free_request(child_req);
+-					}
+-#endif
++					SPDK_WARNLOG("Warning: child req submit failed.\n");
+ 				}
+ 			} else { /* free remaining child_reqs since one child_req fails */
+ 				nvme_request_remove_child(req, child_req);
+diff --git a/lib/nvme/nvme_uevent.h b/lib/nvme/nvme_uevent.h
+index 1921801..94f6710 100644
+--- a/lib/nvme/nvme_uevent.h
++++ b/lib/nvme/nvme_uevent.h
+@@ -41,7 +41,6 @@
+ #ifndef SPDK_UEVENT_H_
+ #define SPDK_UEVENT_H_
+ 
+-#ifndef SPDK_CONFIG_APP_RW
+ #define SPDK_NVME_UEVENT_SUBSYSTEM_UNRECOGNIZED 0
+ #define SPDK_NVME_UEVENT_SUBSYSTEM_UIO 1
+ #define SPDK_NVME_UEVENT_SUBSYSTEM_VFIO 2
+@@ -59,6 +58,5 @@ struct spdk_uevent {
+ 
+ int nvme_uevent_connect(void);
+ int nvme_get_uevent(int fd, struct spdk_uevent *uevent);
+-#endif
+ 
+ #endif /* SPDK_UEVENT_H_ */
+diff --git a/lib/thread/thread.c b/lib/thread/thread.c
+index 1ab822b..a3d342e 100644
+--- a/lib/thread/thread.c
++++ b/lib/thread/thread.c
+@@ -57,6 +57,12 @@ void spdk_set_thread_exited(struct spdk_thread *thread)
+ {
+ 	thread->state = SPDK_THREAD_STATE_EXITED;
+ }
++
++uint32_t spdk_get_channel_ref(void *io_ch)
++{
++	struct spdk_io_channel *ch = io_ch;
++	return ch->ref;
++}
+ #endif
+ 
+ static pthread_mutex_t g_devlist_mutex = PTHREAD_MUTEX_INITIALIZER;
+@@ -1147,11 +1153,6 @@ spdk_poller_unregister(struct spdk_poller **ppoller)
+ 	struct spdk_thread *thread;
+ 	struct spdk_poller *poller;
+ 
+-	if (!g_bRunReactor) {
+-		*ppoller = NULL;
+-		return;
+-	}
+-
+ 	poller = *ppoller;
+ 	if (poller == NULL) {
+ 		return;
+@@ -1413,12 +1414,10 @@ _finish_unregister(void *arg)
+ 	struct spdk_thread *thread;
+ 
+ 	thread = spdk_get_thread();
+-	assert(thread == dev->unregister_thread);
+ 
+ 	SPDK_DEBUGLOG(thread, "Finishing unregistration of io_device %s (%p) on thread %s\n",
+ 		      dev->name, dev->io_device, thread->name);
+ 
+-	assert(thread->pending_unregister_count > 0);
+ 	thread->pending_unregister_count--;
+ 
+ 	dev->unregister_cb(dev->io_device);
+@@ -1468,7 +1467,6 @@ spdk_io_device_unregister(void *io_device, spdk_io_device_unregister_cb unregist
+ 
+ 	if (!dev) {
+ 		SPDK_ERRLOG("io_device %p not found\n", io_device);
+-		assert(false);
+ 		pthread_mutex_unlock(&g_devlist_mutex);
+ 		return;
+ 	}
+@@ -1545,8 +1543,8 @@ spdk_get_io_channel(void *io_device)
+ 		if (ch->dev == dev) {
+ 			ch->ref++;
+ 
+-			SPDK_DEBUGLOG(thread, "Get io_channel %p for io_device %s (%p) on thread %s refcnt %u\n",
+-				      ch, dev->name, dev->io_device, thread->name, ch->ref);
++			SPDK_NOTICELOG("Get io_channel %p for io_device %s (%p) on thread %s refcnt %u\n",
++				       ch, dev->name, dev->io_device, thread->name, ch->ref);
+ 
+ 			/*
+ 			 * An I/O channel already exists for this device on this
+@@ -1798,7 +1796,6 @@ spdk_for_each_channel(void *io_device, spdk_channel_msg fn, void *ctx,
+ #else
+ 				_call_channel(i);
+ #endif
+-				assert(rc == 0);
+ 				return;
+ 			}
+ 		}
+@@ -1821,7 +1818,7 @@ spdk_for_each_channel_continue(struct spdk_io_channel_iter *i, int status)
+ 	struct spdk_io_channel *ch;
+ 	int rc __attribute__((unused));
+ 
+-	assert(i->cur_thread == spdk_get_thread());
++	/* assert(i->cur_thread == spdk_get_thread()); */
+ 
+ 	i->status = status;
+ 
+diff --git a/mk/spdk.common.mk b/mk/spdk.common.mk
+index 6bdc1dd..da214c8 100644
+--- a/mk/spdk.common.mk
++++ b/mk/spdk.common.mk
+@@ -254,7 +254,7 @@ CXXFLAGS += $(COMMON_CFLAGS)
+ SYS_LIBS += -lrt
+ SYS_LIBS += -luuid
+ SYS_LIBS += -lcrypto
+-SYS_LIBS += -lsecurec
++SYS_LIBS += -lboundscheck
+ 
+ ifneq ($(CONFIG_NVME_CUSE)$(CONFIG_FUSE),nn)
+ SYS_LIBS += -lfuse3
+diff --git a/module/bdev/nvme/bdev_nvme.c b/module/bdev/nvme/bdev_nvme.c
+index 01d0238..d291646 100644
+--- a/module/bdev/nvme/bdev_nvme.c
++++ b/module/bdev/nvme/bdev_nvme.c
+@@ -280,9 +280,6 @@ bdev_nvme_poll(void *arg)
+ 		}
+ 	}
+ 
+-	if (!spdk_get_reactor_type()) {
+-		return num_completions;
+-	}
+ 	return num_completions > 0 ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
+ }
+ 
+@@ -315,7 +312,6 @@ bdev_nvme_destruct(void *ctx)
+ 	pthread_mutex_unlock(&g_bdev_nvme_mutex);
+ 
+ 	nvme_bdev_ns_detach(nvme_ns);
+-
+ 	free(nvme_disk->disk.name);
+ 	free(nvme_disk);
+ 
+@@ -930,6 +926,7 @@ bdev_nvme_create_cb(void *io_device, void *ctx_buf)
+ 		goto err_qpair;
+ 	}
+ 
++	nvme_ch->state = 0;
+ 	return 0;
+ 
+ err_qpair:
+@@ -956,6 +953,7 @@ bdev_nvme_destroy_cb(void *io_device, void *ctx_buf)
+ 	spdk_nvme_ctrlr_free_io_qpair(nvme_ch->qpair);
+ 
+ 	spdk_put_io_channel(spdk_io_channel_from_ctx(nvme_ch->group));
++	nvme_ch->state = 1;
+ }
+ 
+ static int
+@@ -970,7 +968,7 @@ bdev_nvme_poll_group_create_cb(void *io_device, void *ctx_buf)
+ 
+ 	group->poller = SPDK_POLLER_REGISTER(bdev_nvme_poll, group, g_opts.nvme_ioq_poll_period_us);
+ 
+-	if (group->poller == NULL && spdk_get_reactor_type()) {
++	if (group->poller == NULL) {
+ 		spdk_nvme_poll_group_destroy(group->group);
+ 		return -1;
+ 	}
+@@ -985,7 +983,7 @@ bdev_nvme_poll_group_destroy_cb(void *io_device, void *ctx_buf)
+ 
+ 	spdk_poller_unregister(&group->poller);
+ 	if (spdk_nvme_poll_group_destroy(group->group)) {
+-		SPDK_ERRLOG("Unable to destroy a poll group for the NVMe bdev module.");
++		SPDK_ERRLOG("Unable to destroy a poll group for the NVMe bdev module.\n");
+ 		assert(false);
+ 	}
+ }
+@@ -1320,8 +1318,9 @@ nvme_abort_cpl(void *ctx, const struct spdk_nvme_cpl *cpl)
+ 	struct nvme_bdev_ctrlr *nvme_bdev_ctrlr = ctx;
+ 
+ 	if (spdk_nvme_cpl_is_error(cpl)) {
+-		SPDK_WARNLOG("Abort failed. Resetting controller.\n");
+-		_bdev_nvme_reset(nvme_bdev_ctrlr, NULL);
++		SPDK_WARNLOG("Abort failed, sc is %u, sct is %u. Resetting controller.\n", cpl->status.sc,
++			     cpl->status.sct);
++		spdk_nvme_ctrlr_reset(nvme_bdev_ctrlr->ctrlr);
+ 	}
+ }
+ 
+@@ -1335,8 +1334,6 @@ timeout_cb(void *cb_arg, struct spdk_nvme_ctrlr *ctrlr,
+ 
+ 	assert(nvme_bdev_ctrlr->ctrlr == ctrlr);
+ 
+-	SPDK_WARNLOG("Warning: Detected a timeout. ctrlr=%p qpair=%p cid=%u\n", ctrlr, qpair, cid);
+-
+ 	/* Only try to read CSTS if it's a PCIe controller or we have a timeout on an I/O
+ 	 * queue.  (Note: qpair == NULL when there's an admin cmd timeout.)  Otherwise we
+ 	 * would submit another fabrics cmd on the admin queue to read CSTS and check for its
+@@ -1359,8 +1356,7 @@ timeout_cb(void *cb_arg, struct spdk_nvme_ctrlr *ctrlr,
+ 			if (rc == 0) {
+ 				return;
+ 			}
+-
+-			SPDK_ERRLOG("Unable to send abort. Resetting.\n");
++			SPDK_ERRLOG("Unable to send abort. Resetting, rc is %d.\n", rc);
+ 		}
+ 
+ 	/* FALLTHROUGH */
+@@ -2245,9 +2241,14 @@ bdev_nvme_library_fini(void)
+ 			continue;
+ 		}
+ 		nvme_bdev_ctrlr->destruct = true;
+-
++#ifndef SPDK_CONFIG_APP_RW
+ 		spdk_thread_send_msg(nvme_bdev_ctrlr->thread, _nvme_bdev_ctrlr_destruct,
+ 				     nvme_bdev_ctrlr);
++#else
++		pthread_mutex_unlock(&g_bdev_nvme_mutex);
++		_nvme_bdev_ctrlr_destruct(nvme_bdev_ctrlr);
++		pthread_mutex_lock(&g_bdev_nvme_mutex);
++#endif
+ 	}
+ 
+ 	g_bdev_nvme_module_finish = true;
+@@ -3028,12 +3029,18 @@ bdev_nvme_get_ctrlr(struct spdk_bdev *bdev)
+ }
+ 
+ #ifdef SPDK_CONFIG_APP_RW
+-void *
+-nvme_channel_get_group(void *io_ch)
++void *nvme_channel_get_group(void *io_ch)
++{
++	struct nvme_io_channel *nvme_ch = io_ch;
++	return nvme_ch->group;
++}
++
++int nvme_channel_get_state(void *io_ch)
+ {
+-	struct nvme_io_channel *nvme_io_ch = io_ch;
+-	return nvme_io_ch->group;
++	struct nvme_io_channel *nvme_ch = io_ch;
++	return nvme_ch->state;
+ }
++
+ struct nvme_bdev_io *nvme_bdev_io_update_args(struct nvme_bdev_io *bio, struct iovec *iov,
+ 		int iovcnt)
+ {
+@@ -3128,14 +3135,15 @@ int bdev_probe_ctrlr(void)
+ 	}
+ 
+ 	retry_count = spdk_conf_section_get_intval(sp, "RetryCount");
+-	if (retry_count >= 0) {
+-		g_opts.retry_count = retry_count;
+-	}
+-	if (retry_count > 255) {
++	if (retry_count < 0) {
++		retry_count = 4;
++	} else if (retry_count > 255) {
+ 		SPDK_WARNLOG("RetryCount:%d should not be greater than 255, set it to 255 this time\n",
+ 			     retry_count);
+ 		retry_count = 255;
+ 	}
++
++	g_opts.retry_count = retry_count;
+ 	syslog(LOG_INFO, "RetryCount is set to %d\n", retry_count);
+ 
+ 	val = spdk_conf_section_get_val(sp, "TimeoutUsec");
+diff --git a/module/bdev/nvme/bdev_nvme_self.c b/module/bdev/nvme/bdev_nvme_self.c
+index 1419b1f..dc480ff 100644
+--- a/module/bdev/nvme/bdev_nvme_self.c
++++ b/module/bdev/nvme/bdev_nvme_self.c
+@@ -15,7 +15,6 @@
+ #include "spdk/json.h"
+ #include "spdk/likely.h"
+ #include "spdk/bdev_module.h"
+-#include "spdk/nvme_ocssd.h"
+ #include "spdk/nvme.h"
+ 
+ #include "spdk_internal/bdev_stat.h"
+@@ -23,11 +22,6 @@
+ #include "common.h"
+ #include <securec.h>
+ 
+-enum data_direction {
+-	BDEV_DISK_READ = 0,
+-	BDEV_DISK_WRITE = 1
+-};
+-
+ void bdev_update_ch_timeout(struct nvme_bdev_poll_group *group)
+ {
+ 	uint64_t current_ticks = 0;
+@@ -49,8 +43,7 @@ void bdev_update_ch_timeout(struct nvme_bdev_poll_group *group)
+ 	}
+ }
+ 
+-int
+-_bdev_nvme_submit_request_self(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io)
++int _bdev_nvme_submit_request_self(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io)
+ {
+ 	struct nvme_io_channel *nvme_ch = spdk_io_channel_get_ctx(ch);
+ 
+@@ -65,27 +58,27 @@ _bdev_nvme_submit_request_self(struct spdk_io_channel *ch, struct spdk_bdev_io *
+ 			      bdev_io->u.contig.offset_blocks);
+ 		return bdev_nvme_queue_cmd_with_md((struct nvme_bdev *)bdev_io->bdev->ctxt, nvme_ch->qpair,
+ 						   bdev_io->driver_ctx, bdev_io->u.contig.buf,
+-						   bdev_io->u.contig.md_buf, BDEV_DISK_READ,
++						   bdev_io->u.contig.md_buf, SPDK_BDEV_IO_TYPE_READ,
+ 						   bdev_io->u.contig.num_blocks, bdev_io->u.contig.offset_blocks);
+ 	case SPDK_BDEV_IO_TYPE_WRITE_NVME:
+ 		SPDK_DEBUGLOG(bdev_nvme, "write %lu lbas with offset %#lx\n", bdev_io->u.contig.num_blocks,
+ 			      bdev_io->u.contig.offset_blocks);
+ 		return bdev_nvme_queue_cmd_with_md((struct nvme_bdev *)bdev_io->bdev->ctxt, nvme_ch->qpair,
+ 						   bdev_io->driver_ctx, bdev_io->u.contig.buf,
+-						   bdev_io->u.contig.md_buf, BDEV_DISK_WRITE,
++						   bdev_io->u.contig.md_buf, SPDK_BDEV_IO_TYPE_WRITE,
+ 						   bdev_io->u.contig.num_blocks, bdev_io->u.contig.offset_blocks);
+ 	case SPDK_BDEV_IO_TYPE_READV_NVME:
+ 		SPDK_DEBUGLOG(bdev_nvme, "readv %lu lbas with offset %#lx\n", bdev_io->u.bdev.num_blocks,
+ 			      bdev_io->u.bdev.offset_blocks);
+ 		return bdev_nvme_queue_cmd_v_with_md((struct nvme_bdev *)bdev_io->bdev->ctxt, nvme_ch->qpair,
+-						     bdev_io->driver_ctx, BDEV_DISK_READ,
++						     bdev_io->driver_ctx, SPDK_BDEV_IO_TYPE_READ,
+ 						     bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
+ 						     bdev_io->u.bdev.num_blocks, bdev_io->u.bdev.offset_blocks);
+ 	case SPDK_BDEV_IO_TYPE_WRITEV_NVME:
+ 		SPDK_DEBUGLOG(bdev_nvme, "writev %lu lbas with offset %#lx\n", bdev_io->u.bdev.num_blocks,
+ 			      bdev_io->u.bdev.offset_blocks);
+ 		return bdev_nvme_queue_cmd_v_with_md((struct nvme_bdev *)bdev_io->bdev->ctxt, nvme_ch->qpair,
+-						     bdev_io->driver_ctx, BDEV_DISK_WRITE,
++						     bdev_io->driver_ctx, SPDK_BDEV_IO_TYPE_WRITE,
+ 						     bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
+ 						     bdev_io->u.bdev.num_blocks, bdev_io->u.bdev.offset_blocks);
+ 	case SPDK_BDEV_IO_TYPE_UNMAP_BLOCKS:
+@@ -100,14 +93,12 @@ _bdev_nvme_submit_request_self(struct spdk_io_channel *ch, struct spdk_bdev_io *
+ 	return 0;
+ }
+ 
+-int
+-bdev_nvme_dump_info_json_self(void *ctx, struct spdk_json_write_ctx *w)
++int bdev_nvme_dump_info_json_self(void *ctx, struct spdk_json_write_ctx *w)
+ {
+ 	return 0;
+ }
+ 
+-uint16_t
+-bdev_nvme_get_io_channel_id(struct spdk_io_channel *ch)
++uint16_t bdev_nvme_get_io_channel_id(struct spdk_io_channel *ch)
+ {
+ 	struct nvme_io_channel *nvme_ch = spdk_io_channel_get_ctx(ch);
+ 	uint16_t channel_id;
+@@ -116,15 +107,13 @@ bdev_nvme_get_io_channel_id(struct spdk_io_channel *ch)
+ 	return channel_id;
+ }
+ 
+-uint64_t
+-bdev_nvme_get_timeout_count(struct spdk_io_channel *ch)
++uint64_t bdev_nvme_get_timeout_count(struct spdk_io_channel *ch)
+ {
+ 	struct nvme_io_channel *nvme_ch = spdk_io_channel_get_ctx(ch);
+ 	return nvme_ch->group->num_poll_timeout;
+ }
+ 
+-int32_t
+-nvme_ctrlr_get_info(const char *ctrlName, struct nvme_ctrlr_info **ppCtrlr)
++int32_t nvme_ctrlr_get_info(const char *ctrlName, struct nvme_ctrlr_info **ppCtrlr)
+ {
+ 	uint32_t num_ctrlr = 0, i = 0;
+ 	struct nvme_bdev_ctrlr *nvme_bdev_ctrlr = NULL;
+@@ -221,8 +210,7 @@ nvme_ctrlr_get_info(const char *ctrlName, struct nvme_ctrlr_info **ppCtrlr)
+ 	return num_ctrlr;
+ }
+ 
+-struct nvme_bdev_ctrlr *
+-nvme_ctrlr_get_by_name(const char *name)
++struct nvme_bdev_ctrlr *nvme_ctrlr_get_by_name(const char *name)
+ {
+ 	struct nvme_bdev_ctrlr *nvme_bdev_ctrlr = NULL;
+ 
+@@ -239,8 +227,7 @@ nvme_ctrlr_get_by_name(const char *name)
+ 	return NULL;
+ }
+ 
+-struct spdk_nvme_ctrlr *
+-spdk_nvme_ctrlr_get_by_name(const char *ctrlname)
++struct spdk_nvme_ctrlr *spdk_nvme_ctrlr_get_by_name(const char *ctrlname)
+ {
+ 	struct nvme_bdev_ctrlr	*nvme_bdev_ctrlr = NULL;
+ 
+@@ -253,8 +240,7 @@ spdk_nvme_ctrlr_get_by_name(const char *ctrlname)
+ 	return NULL;
+ }
+ 
+-struct spdk_nvme_ctrlr *
+-spdk_nvme_ctrlr_get_by_ctrlr(const struct nvme_bdev_ctrlr *nvme_bdev_ctrlr)
++struct spdk_nvme_ctrlr *spdk_nvme_ctrlr_get_by_ctrlr(const struct nvme_bdev_ctrlr *nvme_bdev_ctrlr)
+ {
+ 	if (nvme_bdev_ctrlr == NULL) {
+ 		return NULL;
+@@ -262,8 +248,7 @@ spdk_nvme_ctrlr_get_by_ctrlr(const struct nvme_bdev_ctrlr *nvme_bdev_ctrlr)
+ 	return nvme_bdev_ctrlr->ctrlr;
+ }
+ 
+-void
+-nvme_ctrlr_clear_iostat_by_name(const char *ctrlname)
++void nvme_ctrlr_clear_iostat_by_name(const char *ctrlname)
+ {
+ 	int i;
+ 	size_t size = strnlen(ctrlname, 24);
+@@ -288,8 +273,7 @@ nvme_ctrlr_clear_iostat_by_name(const char *ctrlname)
+ 	}
+ }
+ 
+-void
+-nvme_ctrlr_clear_iostat_all(void)
++void nvme_ctrlr_clear_iostat_all(void)
+ {
+ 	struct nvme_bdev_ctrlr	*nvme_bdev_ctrlr = NULL;
+ 
+@@ -298,8 +282,7 @@ nvme_ctrlr_clear_iostat_all(void)
+ 	}
+ }
+ 
+-struct spdk_nvme_ns *
+-bdev_nvme_get_ns(struct nvme_bdev *nbdev)
++struct spdk_nvme_ns *bdev_nvme_get_ns(struct nvme_bdev *nbdev)
+ {
+ 	return nbdev->nvme_ns->ns;
+ }
+@@ -331,11 +314,10 @@ void bdev_nvme_update_block_by_nvme_ctrlr(struct spdk_nvme_ctrlr *ctrlr)
+ 	pthread_mutex_unlock(&g_bdev_nvme_mutex);
+ }
+ 
+-int
+-bdev_nvme_update_ns(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
++int bdev_nvme_update_ns(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ {
+-	struct spdk_nvme_ctrlr	*ctrlr = nvme_bdev_ctrlr->ctrlr;
+ 	struct nvme_bdev_ns	*ns = NULL;
++	bool ns_active = spdk_nvme_ctrlr_is_active_ns(nvme_bdev_ctrlr->ctrlr, nsid);
+ 
+ 	if (nvme_bdev_ctrlr == NULL || nsid > nvme_bdev_ctrlr->num_ns) {
+ 		SPDK_ERRLOG("Parameter error. nsid[%u], the max nsid is[%u]\n", nsid, nvme_bdev_ctrlr->num_ns);
+@@ -343,14 +325,9 @@ bdev_nvme_update_ns(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ 	}
+ 
+ 	ns = nvme_bdev_ctrlr->namespaces[nsid - 1];
++	ns->type = NVME_BDEV_NS_STANDARD;
+ 
+-	if (spdk_nvme_ctrlr_is_ocssd_supported(ctrlr)) {
+-		ns->type = NVME_BDEV_NS_OCSSD;
+-	} else {
+-		ns->type = NVME_BDEV_NS_STANDARD;
+-	}
+-
+-	if (!ns->populated && spdk_nvme_ctrlr_is_active_ns(nvme_bdev_ctrlr->ctrlr, nsid)) {
++	if (!ns->populated && ns_active) {
+ 		SPDK_NOTICELOG("NSID %u to be added\n", nsid);
+ 		ns->id = nsid;
+ 		ns->ctrlr = nvme_bdev_ctrlr;
+@@ -360,16 +337,16 @@ bdev_nvme_update_ns(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ 		return 0;
+ 	}
+ 
+-	if (ns->populated && !spdk_nvme_ctrlr_is_active_ns(nvme_bdev_ctrlr->ctrlr, nsid)) {
++	if (ns->populated && !ns_active) {
+ 		SPDK_NOTICELOG("NSID %u is removed\n", nsid);
+ 		nvme_ctrlr_depopulate_namespace(nvme_bdev_ctrlr, ns);
+ 		return 0;
+ 	}
+-	return -1;
++
++	return 0;
+ }
+ 
+-bool
+-spdk_bdev_can_remove(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
++bool spdk_bdev_can_remove(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ {
+ 	struct nvme_bdev_ns *ns = NULL;
+ 	struct nvme_bdev *bdev = NULL, *tmp = NULL;
+@@ -398,8 +375,7 @@ spdk_bdev_can_remove(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ 	return empty;
+ }
+ 
+-void
+-spdk_bdev_set_ns_normal(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
++void spdk_bdev_set_ns_normal(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ {
+ 	struct nvme_bdev_ns *ns = NULL;
+ 	struct nvme_bdev *bdev = NULL, *tmp = NULL;
+@@ -419,9 +395,18 @@ spdk_bdev_set_ns_normal(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, uint32_t nsid)
+ 	}
+ }
+ 
+-int
+-bdev_nvme_queue_cmd_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpair, void *driver_ctx,
+-			    void *buffer, void *metadata, int direction, uint64_t lba_count, uint64_t lba)
++static void check_error_type(int rc, bool read, void *qpair)
++{
++	if (rc == -ENOMEM) {
++		SPDK_NOTICELOG("%s failed: rc = %d\n", read ? "read" : "write", rc);
++	} else if (rc < 0) {
++		SPDK_ERRLOG("%s failed: rc = %d, qpair is %p\n", read ? "read" : "write", rc, qpair);
++	}
++}
++
++int bdev_nvme_queue_cmd_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpair,
++				void *driver_ctx,
++				void *buffer, void *metadata, int direction, uint64_t lba_count, uint64_t lba)
+ {
+ 	int rc;
+ 	uint32_t io_flags = 0;
+@@ -452,7 +437,7 @@ bdev_nvme_queue_cmd_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpai
+ 		io_flags |= SPDK_NVME_IO_FLAGS_FORCE_UNIT_ACCESS;
+ 	}
+ 
+-	if (direction == BDEV_DISK_READ) {
++	if (direction == SPDK_BDEV_IO_TYPE_READ) {
+ 		rc = spdk_nvme_ns_cmd_read_with_md(bdev->nvme_ns->ns, qpair, buffer, metadata, lba,
+ 						   lba_count, bdev_nvme_queued_done, driver_ctx, io_flags, 0, 0);
+ 	} else {
+@@ -460,21 +445,13 @@ bdev_nvme_queue_cmd_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpai
+ 						    lba_count, bdev_nvme_queued_done, driver_ctx, io_flags, 0, 0);
+ 	}
+ 
+-	if (rc != 0) {
+-		if (rc == -ENOMEM) {
+-			SPDK_NOTICELOG("%s failed: rc = %d\n", direction == BDEV_DISK_READ ? "read" : "write", rc);
+-		} else {
+-			SPDK_ERRLOG("%s failed: rc = %d, qpair is %p\n", direction == BDEV_DISK_READ ? "read" : "write",
+-				    rc, qpair);
+-		}
+-	}
++	check_error_type(rc, direction == SPDK_BDEV_IO_TYPE_READ, qpair);
+ 	return rc;
+ }
+ 
+-int
+-bdev_nvme_queue_cmd_v_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpair,
+-			      void *driver_ctx,
+-			      int direction, struct iovec *iov, int iovcnt, uint64_t lba_count, uint64_t lba)
++int bdev_nvme_queue_cmd_v_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qpair,
++				  void *driver_ctx,
++				  int direction, struct iovec *iov, int iovcnt, uint64_t lba_count, uint64_t lba)
+ {
+ 	int rc;
+ 	struct nvme_bdev_io *bio = NULL;
+@@ -508,29 +485,21 @@ bdev_nvme_queue_cmd_v_with_md(struct nvme_bdev *bdev, struct spdk_nvme_qpair *qp
+ 
+ 	bio = nvme_bdev_io_update_args((struct nvme_bdev_io *)driver_ctx, iov, iovcnt);
+ 
+-	if (direction == BDEV_DISK_READ) {
++	if (direction == SPDK_BDEV_IO_TYPE_READ) {
+ 		rc = spdk_nvme_ns_cmd_readv(bdev->nvme_ns->ns, qpair, lba,
+ 					    lba_count, bdev_nvme_queued_done, bio, io_flags,
+ 					    bdev_nvme_queued_reset_sgl, bdev_nvme_queued_next_sge);
+ 	} else {
+ 		rc = spdk_nvme_ns_cmd_writev(bdev->nvme_ns->ns, qpair, lba, lba_count,
+-						    0, bdev_nvme_queued_done, bio, io_flags,
++						    bdev_nvme_queued_done, bio, io_flags,
+ 						    bdev_nvme_queued_reset_sgl, bdev_nvme_queued_next_sge);
+ 	}
+ 
+-	if (rc != 0) {
+-		if (rc == -ENOMEM) {
+-			SPDK_NOTICELOG("%s failed: rc = %d\n", direction == BDEV_DISK_READ ? "readv" : "writev", rc);
+-		} else {
+-			SPDK_ERRLOG("%s failed: rc = %d, qpair is %p\n", direction == BDEV_DISK_READ ? "read" : "write", rc,
+-				    qpair);
+-		}
+-	}
++	check_error_type(rc, direction == SPDK_BDEV_IO_TYPE_READ, qpair);
+ 	return rc;
+ }
+ 
+-struct nvme_bdev_ctrlr *
+-bdev_nvme_get_ctrlr_by_bdev_desc(void *bdev_desc)
++struct nvme_bdev_ctrlr *bdev_nvme_get_ctrlr_by_bdev_desc(void *bdev_desc)
+ {
+ 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(bdev_desc);
+ 	struct nvme_bdev *nbdev = (struct nvme_bdev *)bdev->ctxt;
+@@ -540,12 +509,11 @@ bdev_nvme_get_ctrlr_by_bdev_desc(void *bdev_desc)
+ 	return nbdev->nvme_ns->ctrlr;
+ }
+ 
+-int
+-bdev_nvme_unmap_blocks(struct nvme_bdev *nbdev, struct spdk_io_channel *ch, void *driver_ctx,
+-		       struct spdk_nvme_dsm_range *unmap_d, uint16_t unmap_count)
++int bdev_nvme_unmap_blocks(struct nvme_bdev *nbdev, struct spdk_io_channel *ch, void *driver_ctx,
++			   struct spdk_nvme_dsm_range *unmap_d, uint32_t unmap_count)
+ {
+ 	struct nvme_io_channel *nvme_ch = spdk_io_channel_get_ctx(ch);
+-	int i;
++	uint32_t i;
+ 
+ 	if (unmap_count == 0 || unmap_count > SPDK_NVME_DATASET_MANAGEMENT_MAX_RANGES) {
+ 		SPDK_ERRLOG("Invalid parameter, unmap count: %u\n", unmap_count);
+@@ -566,36 +534,39 @@ bdev_nvme_unmap_blocks(struct nvme_bdev *nbdev, struct spdk_io_channel *ch, void
+ 
+ 	spdk_bdev_set_io_location(driver_ctx, (uint8_t)LOCAL_LIBSTORAGE_BDEV_NVME);
+ 	return spdk_nvme_ns_cmd_dataset_management(nbdev->nvme_ns->ns, nvme_ch->qpair,
+-						   SPDK_NVME_DSM_ATTR_DEALLOCATE,
+-						   unmap_d, unmap_count,
+-						   bdev_nvme_queued_done, driver_ctx);
++			SPDK_NVME_DSM_ATTR_DEALLOCATE,
++			unmap_d, unmap_count,
++			bdev_nvme_queued_done, driver_ctx);
+ }
+ 
+-void
+-spdk_bdev_nvme_remove_cb(void *cb_ctx, void *ctrlr)
++void spdk_bdev_nvme_remove_cb(void *cb_ctx, void *ctrlr)
+ {
+ 	remove_cb(cb_ctx, (struct spdk_nvme_ctrlr *)ctrlr);
+ }
+ 
+-void spdk_bdev_fail_ctrlr(const char *traddr)
++void spdk_bdev_fail_ctrlr(void *cb_ctx, void *ctrlr)
+ {
+-	struct nvme_bdev_ctrlr *nvme_bdev_ctrlr;
++	spdk_nvme_ctrlr_fail_hotplug((struct spdk_nvme_ctrlr *)ctrlr);
++	remove_cb(cb_ctx, (struct spdk_nvme_ctrlr *)ctrlr);
++}
++
++struct spdk_nvme_ctrlr *spdk_nvme_bdev_ctrlr_get(char *pci_trid)
++{
++	struct nvme_bdev_ctrlr	*nvme_bdev_ctrlr;
+ 
+-	pthread_mutex_lock(&g_bdev_nvme_mutex);
+ 	TAILQ_FOREACH(nvme_bdev_ctrlr, &g_nvme_bdev_ctrlrs, tailq) {
+-		if (strcmp(nvme_bdev_ctrlr->connected_trid->traddr, traddr) == 0) {
+-			spdk_nvme_ctrlr_fail(nvme_bdev_ctrlr->ctrlr);
+-			remove_cb(NULL, nvme_bdev_ctrlr->ctrlr);
+-			return;
++		if (strcmp(nvme_bdev_ctrlr->connected_trid->traddr, pci_trid) == 0) {
++			return nvme_bdev_ctrlr->ctrlr;
+ 		}
+ 	}
++
++	return NULL;
+ }
+ 
+-int
+-spdk_bdev_nvme_create_self(struct spdk_nvme_transport_id *trid,
+-			   const char *base_name,
+-			   const char **names, size_t *count,
+-			   const char *hostnqn)
++int spdk_bdev_nvme_create_self(struct spdk_nvme_transport_id *trid,
++			       const char *base_name,
++			       const char **names, size_t *count,
++			       const char *hostnqn)
+ {
+ 	struct nvme_probe_ctx	*probe_ctx;
+ 	struct nvme_bdev_ctrlr	*nvme_bdev_ctrlr;
+@@ -616,7 +587,7 @@ spdk_bdev_nvme_create_self(struct spdk_nvme_transport_id *trid,
+ 		return -1;
+ 	}
+ 
+-	if (spdk_nvme_probe(trid, probe_ctx, probe_cb, attach_cb, NULL)) {
++	if (spdk_nvme_probe(trid, probe_ctx, probe_cb, attach_cb, remove_cb)) {
+ 		SPDK_ERRLOG("Failed to probe for new devices\n");
+ 		free(probe_ctx);
+ 		return -1;
+diff --git a/module/bdev/nvme/bdev_nvme_self.h b/module/bdev/nvme/bdev_nvme_self.h
+index d7cc587..43ad7ee 100644
+--- a/module/bdev/nvme/bdev_nvme_self.h
++++ b/module/bdev/nvme/bdev_nvme_self.h
+@@ -40,4 +40,4 @@ bdev_nvme_get_ctrlr_by_bdev_desc(void *bdev_desc);
+ 
+ int
+ bdev_nvme_unmap_blocks(struct nvme_bdev *nbdev, struct spdk_io_channel *ch, void *driver_ctx,
+-		       struct spdk_nvme_dsm_range *unmap_d, uint16_t unmap_count);
++		       struct spdk_nvme_dsm_range *unmap_d, uint32_t unmap_count);
+diff --git a/module/bdev/nvme/common.h b/module/bdev/nvme/common.h
+index 81b4009..8dbcd87 100644
+--- a/module/bdev/nvme/common.h
++++ b/module/bdev/nvme/common.h
+@@ -160,6 +160,7 @@ struct nvme_io_channel {
+ 	struct nvme_bdev_poll_group	*group;
+ 	TAILQ_HEAD(, spdk_bdev_io)	pending_resets;
+ 	struct ocssd_io_channel		*ocssd_ch;
++	int 				state;
+ };
+ 
+ void nvme_ctrlr_populate_namespace_done(struct nvme_async_probe_ctx *ctx,
+diff --git a/scripts/setup_self.sh b/scripts/setup_self.sh
+index 9e77c29..90b7f86 100755
+--- a/scripts/setup_self.sh
++++ b/scripts/setup_self.sh
+@@ -30,8 +30,15 @@ function linux_bind_driver() {
+ 
+ 	echo "$bdf ($ven_dev_id): $old_driver_name -> $driver_name"
+ 
+-	echo "$ven_dev_id" > "/sys/bus/pci/drivers/$driver_name/new_id" 2> /dev/null || true
+-	echo "$bdf" > "/sys/bus/pci/drivers/$driver_name/bind" 2> /dev/null || true
++	if [ "$driver_name" = "nvme" ]
++        then
++                echo 1 > /sys/bus/pci/devices/$bdf/remove
++                sleep 1
++                echo 1 > /sys/bus/pci/rescan
++        else
++                echo "$ven_dev_id" > "/sys/bus/pci/drivers/$driver_name/new_id" 2> /dev/null || true
++                echo "$bdf" > "/sys/bus/pci/drivers/$driver_name/bind" 2> /dev/null || true
++        fi
+ }
+ 
+ function linux_hugetlbfs_mount() {
+-- 
+2.33.0
+

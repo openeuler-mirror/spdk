@@ -1,0 +1,124 @@
+From 34555d211c58ac7615d41547f56756ae02d22957 Mon Sep 17 00:00:00 2001
+From: suweifeng <suweifeng1@huawei.com>
+Date: Tue, 8 Jun 2021 22:11:53 +0800
+Subject: [PATCH 26/27] Fix race condition in continuous setup and teardown
+ cuse session
+
+If we continuous setup and teardown cuse session, It will teardown
+uninitialized cuse session and cause segment fault, So add delay until
+session created.
+
+Signed-off-by: suweifeng <suweifeng1@huawei.com>
+---
+ lib/nvme/nvme_cuse.c | 41 +++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/lib/nvme/nvme_cuse.c b/lib/nvme/nvme_cuse.c
+index 3eccfd0..8f0be31 100644
+--- a/lib/nvme/nvme_cuse.c
++++ b/lib/nvme/nvme_cuse.c
+@@ -55,6 +55,8 @@ struct cuse_device {
+ 
+ 	pthread_t			tid;
+ 	struct fuse_session		*session;
++	pthread_cond_t			session_cond; /* session condition variable */
++	pthread_mutex_t			session_mtx;  /* session mutex variable */
+ 
+ 	struct cuse_device		*ctrlr_device;
+ 	struct cuse_device		*ns_devices;	/**< Array of cuse ns devices */
+@@ -666,11 +668,17 @@ cuse_thread(void *arg)
+ 		cuse_device->session = cuse_lowlevel_setup(cuse_argc, cuse_argv, &ci, &cuse_ctrlr_clop,
+ 				       &multithreaded, cuse_device);
+ 	}
++
+ 	if (!cuse_device->session) {
+ 		SPDK_ERRLOG("Cannot create cuse session\n");
++		pthread_mutex_lock(&cuse_device->session_mtx);
++		pthread_cond_signal(&cuse_device->session_cond);
++		pthread_mutex_unlock(&cuse_device->session_mtx);
+ 		goto err;
+ 	}
+-
++	pthread_mutex_lock(&cuse_device->session_mtx);
++	pthread_cond_signal(&cuse_device->session_cond);
++	pthread_mutex_unlock(&cuse_device->session_mtx);
+ 	SPDK_NOTICELOG("fuse session for device %s created\n", cuse_device->dev_name);
+ 
+ 	/* Receive and process fuse requests */
+@@ -718,13 +726,20 @@ cuse_nvme_ns_start(struct cuse_device *ctrlr_device, uint32_t nsid)
+ 		free(ns_device);
+ 		return -ENAMETOOLONG;
+ 	}
+-
++	pthread_cond_init(&ns_device->session_cond, NULL);
++	pthread_mutex_init(&ns_device->session_mtx, NULL);
+ 	rv = pthread_create(&ns_device->tid, NULL, cuse_thread, ns_device);
+ 	if (rv != 0) {
+ 		SPDK_ERRLOG("pthread_create failed\n");
+ 		return -rv;
+ 	}
+-
++	pthread_mutex_lock(&ns_device->session_mtx);
++	pthread_cond_wait(&ns_device->session_cond, &ns_device->session_mtx);
++	pthread_mutex_unlock(&ns_device->session_mtx);
++	if (!ns_device->session) {
++		SPDK_ERRLOG("create namespace session failed\n");
++		return -1;
++	}
+ 	ns_device->is_started = true;
+ 
+ 	return 0;
+@@ -739,9 +754,10 @@ cuse_nvme_ns_stop(struct cuse_device *ctrlr_device, uint32_t nsid)
+ 	if (!ns_device->is_started) {
+ 		return;
+ 	}
+-
+ 	fuse_session_exit(ns_device->session);
+ 	pthread_join(ns_device->tid, NULL);
++	pthread_cond_destroy(&ns_device->session_cond);
++	pthread_mutex_destroy(&ns_device->session_mtx);
+ 	ns_device->is_started = false;
+ }
+ 
+@@ -817,8 +833,14 @@ cuse_nvme_ctrlr_stop(struct cuse_device *ctrlr_device)
+ 		cuse_nvme_ns_stop(ctrlr_device, i);
+ 	}
+ 
++	if (!ctrlr_device->is_started) {
++		return;
++	}
+ 	fuse_session_exit(ctrlr_device->session);
+ 	pthread_join(ctrlr_device->tid, NULL);
++	pthread_cond_destroy(&ctrlr_device->session_cond);
++	pthread_mutex_destroy(&ctrlr_device->session_mtx);
++	ctrlr_device->is_started = false;
+ 	TAILQ_REMOVE(&g_ctrlr_ctx_head, ctrlr_device, tailq);
+ 	spdk_bit_array_clear(g_ctrlr_started, ctrlr_device->index);
+ 	if (spdk_bit_array_count_set(g_ctrlr_started) == 0) {
+@@ -894,12 +916,23 @@ nvme_cuse_start(struct spdk_nvme_ctrlr *ctrlr)
+ 	snprintf(ctrlr_device->dev_name, sizeof(ctrlr_device->dev_name), "spdk/nvme%d",
+ 		 ctrlr_device->index);
+ 
++	pthread_cond_init(&ctrlr_device->session_cond, NULL);
++	pthread_mutex_init(&ctrlr_device->session_mtx, NULL);
+ 	rv = pthread_create(&ctrlr_device->tid, NULL, cuse_thread, ctrlr_device);
+ 	if (rv != 0) {
+ 		SPDK_ERRLOG("pthread_create failed\n");
+ 		rv = -rv;
+ 		goto err3;
+ 	}
++	pthread_mutex_lock(&ctrlr_device->session_mtx);
++	pthread_cond_wait(&ctrlr_device->session_cond, &ctrlr_device->session_mtx);
++	pthread_mutex_unlock(&ctrlr_device->session_mtx);
++	if (!ctrlr_device->session) {
++		SPDK_ERRLOG("cuse session create failed\n");
++		rv = -1;
++		goto err3;
++	}
++	ctrlr_device->is_started = true;
+ 	TAILQ_INSERT_TAIL(&g_ctrlr_ctx_head, ctrlr_device, tailq);
+ 
+ 	ctrlr_device->ns_devices = (struct cuse_device *)calloc(num_ns, sizeof(struct cuse_device));
+-- 
+2.33.0
+
