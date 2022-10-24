@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 4
+Release: 5
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -123,6 +123,11 @@ make -C doc
 
 %install
 %make_install -j`nproc` prefix=%{_usr} libdir=%{_libdir} datadir=%{_datadir}
+install -d $RPM_BUILD_ROOT/opt/spdk/scripts
+install -d $RPM_BUILD_ROOT/opt/spdk/include/spdk
+install -m 0744 ./scripts/setup.sh $RPM_BUILD_ROOT/opt/spdk/scripts/setup.sh
+install -m 0744 ./scripts/common.sh $RPM_BUILD_ROOT/opt/spdk/scripts/common.sh
+install -m 0644 ./include/spdk/pci_ids.h $RPM_BUILD_ROOT/opt/spdk/include/spdk/pci_ids.h
 
 # Install tools
 mkdir -p %{install_datadir}
@@ -157,6 +162,13 @@ mv doc/output/html/ %{install_docdir}
 %files
 %{_bindir}/spdk_*
 %{_libdir}/*.so.*
+%dir /opt/spdk
+%dir /opt/spdk/scripts
+%dir /opt/spdk/include
+%dir /opt/spdk/include/spdk
+/opt/spdk/scripts/setup.sh
+/opt/spdk/scripts/common.sh
+/opt/spdk/include/spdk/pci_ids.h
 
 
 %files devel
@@ -177,6 +189,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Mon Oct 24 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-5
+- Add the setup.sh script during installation
+
 * Tue Mar 15 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-4
 - Remove rpath link option, Due to it's easy for attacher to
   construct 'rpath' attacks
