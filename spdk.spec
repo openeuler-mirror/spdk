@@ -1,9 +1,10 @@
+#needsrootforbuild
 # Build documentation package
 %bcond_with doc
 
 Name: spdk
 Version: 21.01.1
-Release: 6
+Release: 7
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -36,6 +37,7 @@ Patch25: 0025-Adapt-for-ES3000-serial-vendor-special-opcode-in-CUS.patch
 Patch26: 0026-Fix-race-condition-in-continuous-setup-and-teardown-.patch
 Patch27: 0027-Change-log-level-in-poll-timeout.patch
 Patch28: 0028-configure-add-CONFIG_HAVE_ARC4RANDOM.patch
+Patch29: 0029-Enable-unittest-in-make-check.patch
 
 %define package_version %{version}-%{release}
 
@@ -58,6 +60,7 @@ BuildRequires: libiscsi-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires: libibverbs-devel, librdmacm-devel
 BuildRequires: fuse3, fuse3-devel
 BuildRequires: libboundscheck
+BuildRequires: CUnit, CUnit-devel
 %if %{with doc}
 BuildRequires: doxygen mscgen graphviz
 %endif
@@ -117,7 +120,6 @@ BuildArch: noarch
 %build
 ./configure --prefix=%{_usr} \
 	--disable-tests \
-	--disable-unit-tests \
 	--without-crypto \
 	--without-isal \
 	--with-dpdk=/usr/lib64/dpdk/pmds-22.0 \
@@ -137,6 +139,9 @@ make -j`nproc` all
 %if %{with doc}
 make -C doc
 %endif
+
+%check
+test/unit/unittest.sh
 
 %install
 %make_install -j`nproc` prefix=%{_usr} libdir=%{_libdir} datadir=%{_datadir}
@@ -207,6 +212,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Tue Nov 1 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-7
+- Enable unittest
+
 * Mon Oct 10 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-6
 - configure add CONFIG_HAVE_ARC4RANDOM
 

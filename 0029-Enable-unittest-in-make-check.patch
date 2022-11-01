@@ -1,0 +1,340 @@
+From 344a408a5ff466f530e6788341e308f9193011cd Mon Sep 17 00:00:00 2001
+From: Weifeng Su <suweifeng1@huawei.com>
+Date: Tue, 1 Nov 2022 20:41:17 +0800
+Subject: [PATCH] Enable unittest in make check
+
+To adapt to unittest, the following modifications are made:
+1.Enable unittest compilation and remove --disable-unit-tests configuration item.
+2.To eliminate the weak reference of spdk_log,add a reference to log.c in spdk.unittest.mk.
+3.Use CONFIG_APP_RW to add some adaptation codes to the bdev and nvme cases.
+4.Use CONFIG_APP_RW in the unittest.sh file to shield the execution of cases that are incompatible with --enable-raw.
+
+Signed-off-by: Weifeng Su <suweifeng1@huawei.com>
+---
+ mk/spdk.unittest.mk                           |  3 +++
+ test/common/autotest_common.sh                | 10 +++++++++-
+ test/unit/lib/Makefile                        |  4 ++++
+ test/unit/lib/bdev/bdev.c/bdev_ut.c           |  3 +++
+ test/unit/lib/bdev/mt/bdev.c/bdev_ut.c        |  3 +++
+ test/unit/lib/bdev/part.c/part_ut.c           |  3 +++
+ test/unit/lib/nvme/Makefile                   |  8 ++++++--
+ test/unit/lib/nvme/nvme.c/nvme_ut.c           |  5 +++++
+ .../lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c     |  3 +++
+ test/unit/lib/nvme/nvme_pcie.c/nvme_pcie_ut.c |  7 +++++++
+ test/unit/lib/scsi/Makefile                   |  4 ++++
+ test/unit/lib/util/Makefile                   |  5 +++++
+ test/unit/unittest.sh                         | 19 ++++++++++++++++++-
+ 13 files changed, 73 insertions(+), 4 deletions(-)
+
+diff --git a/mk/spdk.unittest.mk b/mk/spdk.unittest.mk
+index 01d2bc3..d362ba9 100644
+--- a/mk/spdk.unittest.mk
++++ b/mk/spdk.unittest.mk
+@@ -50,6 +50,9 @@ CFLAGS += -I$(SPDK_ROOT_DIR)/lib
+ CFLAGS += -I$(SPDK_ROOT_DIR)/module
+ CFLAGS += -I$(SPDK_ROOT_DIR)/test
+ CFLAGS += -ffunction-sections
++ifeq ($(CONFIG_APP_RW), y)
++CFLAGS += -include$(SPDK_ROOT_DIR)/lib/log/log.c
++endif
+ LDFLAGS += -Wl,--gc-sections
+ 
+ SPDK_LIB_LIST += thread util log
+diff --git a/test/common/autotest_common.sh b/test/common/autotest_common.sh
+index 8fc383f..6865698 100755
+--- a/test/common/autotest_common.sh
++++ b/test/common/autotest_common.sh
+@@ -160,7 +160,11 @@ export UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1:abort_on_error=1'
+ # Export LeakSanitizer option to use suppression file in order to prevent false positives
+ # and known leaks in external executables or libraries from showing up.
+ asan_suppression_file="/var/tmp/asan_suppression_file"
+-sudo rm -rf "$asan_suppression_file"
++if [ $CONFIG_APP_RW == 'y' ]; then
++	rm -rf "$asan_suppression_file"
++else
++	sudo rm -rf "$asan_suppression_file"
++fi
+ cat << EOL >> "$asan_suppression_file"
+ # ASAN has some bugs around thread_local variables.  We have a destructor in place
+ # to free the thread contexts, but ASAN complains about the leak before those
+@@ -309,6 +313,10 @@ function set_test_storage() {
+ 		mount=$(df "$target_dir" | awk '$1 !~ /Filesystem/{print $6}')
+ 
+ 		target_space=${avails["$mount"]}
++		if [ $CONFIG_APP_RW == 'y' ]; then
++			export SPDK_TEST_STORAGE=$target_dir
++			return 0
++		fi
+ 		if ((target_space == 0 || target_space < requested_size)); then
+ 			continue
+ 		fi
+diff --git a/test/unit/lib/Makefile b/test/unit/lib/Makefile
+index aa2d707..ac8f66c 100644
+--- a/test/unit/lib/Makefile
++++ b/test/unit/lib/Makefile
+@@ -34,7 +34,11 @@
+ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+ 
++ifeq ($(CONFIG_APP_RW), y)
++DIRS-y = bdev blob blobfs event ioat iscsi json jsonrpc lvol
++else
+ DIRS-y = bdev blob blobfs event ioat iscsi json jsonrpc log lvol
++endif    
+ DIRS-y += notify nvme nvmf scsi sock thread util
+ DIRS-$(CONFIG_IDXD) += idxd
+ DIRS-$(CONFIG_REDUCE) += reduce
+diff --git a/test/unit/lib/bdev/bdev.c/bdev_ut.c b/test/unit/lib/bdev/bdev.c/bdev_ut.c
+index f210692..159a01a 100644
+--- a/test/unit/lib/bdev/bdev.c/bdev_ut.c
++++ b/test/unit/lib/bdev/bdev.c/bdev_ut.c
+@@ -41,6 +41,9 @@
+ #undef SPDK_CONFIG_VTUNE
+ 
+ #include "bdev/bdev.c"
++#ifdef SPDK_CONFIG_APP_RW
++#include "bdev/bdev_self.c"
++#endif
+ 
+ struct spdk_trace_histories *g_trace_histories;
+ DEFINE_STUB_V(spdk_trace_add_register_fn, (struct spdk_trace_register_fn *reg_fn));
+diff --git a/test/unit/lib/bdev/mt/bdev.c/bdev_ut.c b/test/unit/lib/bdev/mt/bdev.c/bdev_ut.c
+index 238823e..80d86cb 100644
+--- a/test/unit/lib/bdev/mt/bdev.c/bdev_ut.c
++++ b/test/unit/lib/bdev/mt/bdev.c/bdev_ut.c
+@@ -41,6 +41,9 @@
+ #undef SPDK_CONFIG_VTUNE
+ 
+ #include "bdev/bdev.c"
++#ifdef SPDK_CONFIG_APP_RW
++#include "bdev/bdev_self.c"
++#endif
+ 
+ #define BDEV_UT_NUM_THREADS 3
+ 
+diff --git a/test/unit/lib/bdev/part.c/part_ut.c b/test/unit/lib/bdev/part.c/part_ut.c
+index 2258c71..15bc5d7 100644
+--- a/test/unit/lib/bdev/part.c/part_ut.c
++++ b/test/unit/lib/bdev/part.c/part_ut.c
+@@ -41,6 +41,9 @@
+ #undef SPDK_CONFIG_VTUNE
+ 
+ #include "bdev/bdev.c"
++#ifdef SPDK_CONFIG_APP_RW
++#include "bdev/bdev_self.c"
++#endif
+ #include "bdev/part.c"
+ 
+ struct spdk_trace_histories *g_trace_histories;
+diff --git a/test/unit/lib/nvme/Makefile b/test/unit/lib/nvme/Makefile
+index 5f74579..7ca1632 100644
+--- a/test/unit/lib/nvme/Makefile
++++ b/test/unit/lib/nvme/Makefile
+@@ -33,9 +33,13 @@
+ 
+ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
+ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+-
++ifeq ($(CONFIG_APP_RW), y)
++DIRS-y = nvme.c nvme_ctrlr.c nvme_ctrlr_cmd.c nvme_ctrlr_ocssd_cmd.c nvme_ns.c nvme_ns_cmd.c nvme_ns_ocssd_cmd.c nvme_pcie.c nvme_poll_group.c nvme_qpair.c \
++	 nvme_quirks.c nvme_tcp.c
++else
+ DIRS-y = nvme.c nvme_ctrlr.c nvme_ctrlr_cmd.c nvme_ctrlr_ocssd_cmd.c nvme_ns.c nvme_ns_cmd.c nvme_ns_ocssd_cmd.c nvme_pcie.c nvme_poll_group.c nvme_qpair.c \
+-	 nvme_quirks.c nvme_tcp.c nvme_uevent.c \
++	 nvme_quirks.c nvme_tcp.c nvme_uevent.c  
++endif
+ 
+ DIRS-$(CONFIG_RDMA) += nvme_rdma.c
+ 
+diff --git a/test/unit/lib/nvme/nvme.c/nvme_ut.c b/test/unit/lib/nvme/nvme.c/nvme_ut.c
+index bef45c6..cd2b82d 100644
+--- a/test/unit/lib/nvme/nvme.c/nvme_ut.c
++++ b/test/unit/lib/nvme/nvme.c/nvme_ut.c
+@@ -67,6 +67,11 @@ DEFINE_STUB(nvme_uevent_connect, int, (void), 1);
+ DEFINE_STUB(spdk_nvme_poll_group_process_completions, int64_t, (struct spdk_nvme_poll_group *group,
+ 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb), 0);
+ 
++#ifdef SPDK_CONFIG_APP_RW
++DEFINE_STUB(spdk_nvme_ctrlr_process_admin_completions, int32_t, (struct spdk_nvme_ctrlr *ctrlr), 0);
++DEFINE_STUB_V(spdk_output_debug_info, (void));
++#endif
++
+ static bool ut_destruct_called = false;
+ void
+ nvme_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
+diff --git a/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c b/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
+index 16a4c1b..9a1fb5a 100644
+--- a/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
++++ b/test/unit/lib/nvme/nvme_ctrlr.c/nvme_ctrlr_ut.c
+@@ -40,6 +40,9 @@
+ #include "common/lib/test_env.c"
+ 
+ #include "nvme/nvme_ctrlr.c"
++#ifdef SPDK_CONFIG_APP_RW
++#include "nvme/nvme_ctrlr_self.c"
++#endif
+ #include "nvme/nvme_quirks.c"
+ 
+ SPDK_LOG_REGISTER_COMPONENT(nvme)
+diff --git a/test/unit/lib/nvme/nvme_pcie.c/nvme_pcie_ut.c b/test/unit/lib/nvme/nvme_pcie.c/nvme_pcie_ut.c
+index 5956bce..55d2048 100644
+--- a/test/unit/lib/nvme/nvme_pcie.c/nvme_pcie_ut.c
++++ b/test/unit/lib/nvme/nvme_pcie.c/nvme_pcie_ut.c
+@@ -75,6 +75,11 @@ DEFINE_STUB(spdk_pci_device_get_id, struct spdk_pci_id, (struct spdk_pci_device
+ 
+ DEFINE_STUB(nvme_uevent_connect, int, (void), 0);
+ 
++#ifdef SPDK_CONFIG_APP_RW
++DEFINE_STUB(nvme_qpair_check_enabled, bool, (struct spdk_nvme_qpair *qpair), true);
++DEFINE_STUB_V(nvme_qpair_abort_reqs, (struct spdk_nvme_qpair *qpair,uint32_t dnr));
++#endif
++
+ SPDK_LOG_REGISTER_COMPONENT(nvme)
+ 
+ struct nvme_driver *g_spdk_nvme_driver = NULL;
+@@ -309,6 +314,7 @@ test_nvme_pcie_hotplug_monitor(void)
+ 	TAILQ_INIT(&driver.shared_attached_ctrlrs);
+ 	g_spdk_nvme_driver = &driver;
+ 
++#ifndef SPDK_CONFIG_APP_RW
+ 	/* Case 1:  SPDK_NVME_UEVENT_ADD/ NVME_VFIO */
+ 	entry.uevent.subsystem = SPDK_NVME_UEVENT_SUBSYSTEM_VFIO;
+ 	entry.uevent.action = SPDK_NVME_UEVENT_ADD;
+@@ -385,6 +391,7 @@ test_nvme_pcie_hotplug_monitor(void)
+ 	_nvme_pcie_hotplug_monitor(&test_nvme_probe_ctx);
+ 
+ 	CU_ASSERT(pctrlr.ctrlr.is_failed == true);
++#endif
+ 
+ 	pthread_mutex_destroy(&driver.lock);
+ 	pthread_mutexattr_destroy(&attr);
+diff --git a/test/unit/lib/scsi/Makefile b/test/unit/lib/scsi/Makefile
+index 8044d3f..54ddcb7 100644
+--- a/test/unit/lib/scsi/Makefile
++++ b/test/unit/lib/scsi/Makefile
+@@ -34,7 +34,11 @@
+ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
+ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+ 
++ifeq ($(CONFIG_APP_RW), y)
++DIRS-y = dev.c lun.c scsi.c scsi_bdev.c
++else
+ DIRS-y = dev.c lun.c scsi.c scsi_bdev.c scsi_pr.c
++endif
+ 
+ .PHONY: all clean $(DIRS-y)
+ 
+diff --git a/test/unit/lib/util/Makefile b/test/unit/lib/util/Makefile
+index 2217157..eb0a4c5 100644
+--- a/test/unit/lib/util/Makefile
++++ b/test/unit/lib/util/Makefile
+@@ -34,8 +34,13 @@
+ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
+ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+ 
++ifeq ($(CONFIG_APP_RW), y)
++DIRS-y = base64.c bit_array.c cpuset.c crc16.c crc32_ieee.c crc32c.c dif.c \
++	 iov.c pipe.c string.c
++else
+ DIRS-y = base64.c bit_array.c cpuset.c crc16.c crc32_ieee.c crc32c.c dif.c \
+ 	 iov.c math.c pipe.c string.c
++endif
+ 
+ .PHONY: all clean $(DIRS-y)
+ 
+diff --git a/test/unit/unittest.sh b/test/unit/unittest.sh
+index 91b249c..444bb24 100755
+--- a/test/unit/unittest.sh
++++ b/test/unit/unittest.sh
+@@ -11,9 +11,12 @@ rootdir=$(readlink -f $(dirname $0)/../..)
+ source "$rootdir/test/common/autotest_common.sh"
+ 
+ cd "$rootdir"
++enable_raw=`grep '#define SPDK_CONFIG_APP_RW 1' $rootdir/include/spdk/config.h`
+ 
+ function unittest_bdev() {
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/bdev/bdev.c/bdev_ut
++	fi
+ 	$valgrind $testdir/lib/bdev/bdev_ocssd.c/bdev_ocssd_ut
+ 	$valgrind $testdir/lib/bdev/raid/bdev_raid.c/bdev_raid_ut
+ 	$valgrind $testdir/lib/bdev/bdev_zone.c/bdev_zone_ut
+@@ -22,13 +25,15 @@ function unittest_bdev() {
+ 	$valgrind $testdir/lib/bdev/scsi_nvme.c/scsi_nvme_ut
+ 	$valgrind $testdir/lib/bdev/vbdev_lvol.c/vbdev_lvol_ut
+ 	$valgrind $testdir/lib/bdev/vbdev_zone_block.c/vbdev_zone_block_ut
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/bdev/mt/bdev.c/bdev_ut
++	fi
+ }
+ 
+ function unittest_blob() {
+ 	# We do not compile blob_ut on systems with too old Cunit, so do
+ 	# not try to execute it if it doesn't exist
+-	if [[ -e $testdir/lib/blob/blob.c/blob_ut ]]; then
++	if [[ -z ${enable_raw} && -e $testdir/lib/blob/blob.c/blob_ut ]]; then
+ 		$valgrind $testdir/lib/blob/blob.c/blob_ut
+ 	fi
+ 	$valgrind $testdir/lib/blobfs/tree.c/tree_ut
+@@ -82,14 +87,18 @@ function unittest_nvme() {
+ 	$valgrind $testdir/lib/nvme/nvme_poll_group.c/nvme_poll_group_ut
+ 	$valgrind $testdir/lib/nvme/nvme_quirks.c/nvme_quirks_ut
+ 	$valgrind $testdir/lib/nvme/nvme_tcp.c/nvme_tcp_ut
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/nvme/nvme_uevent.c/nvme_uevent_ut
++	fi
+ }
+ 
+ function unittest_nvmf() {
+ 	$valgrind $testdir/lib/nvmf/ctrlr.c/ctrlr_ut
+ 	$valgrind $testdir/lib/nvmf/ctrlr_bdev.c/ctrlr_bdev_ut
+ 	$valgrind $testdir/lib/nvmf/ctrlr_discovery.c/ctrlr_discovery_ut
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/nvmf/subsystem.c/subsystem_ut
++	fi
+ 	$valgrind $testdir/lib/nvmf/tcp.c/tcp_ut
+ }
+ 
+@@ -98,7 +107,9 @@ function unittest_scsi() {
+ 	$valgrind $testdir/lib/scsi/lun.c/lun_ut
+ 	$valgrind $testdir/lib/scsi/scsi.c/scsi_ut
+ 	$valgrind $testdir/lib/scsi/scsi_bdev.c/scsi_bdev_ut
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/scsi/scsi_pr.c/scsi_pr_ut
++	fi
+ }
+ 
+ function unittest_sock() {
+@@ -120,7 +131,9 @@ function unittest_util() {
+ 	$valgrind $testdir/lib/util/string.c/string_ut
+ 	$valgrind $testdir/lib/util/dif.c/dif_ut
+ 	$valgrind $testdir/lib/util/iov.c/iov_ut
++	if [ -z ${enable_raw} ]; then
+ 	$valgrind $testdir/lib/util/math.c/math_ut
++	fi
+ 	$valgrind $testdir/lib/util/pipe.c/pipe_ut
+ }
+ 
+@@ -200,7 +213,9 @@ run_test "unittest_iscsi" unittest_iscsi
+ run_test "unittest_json" unittest_json
+ run_test "unittest_notify" $valgrind $testdir/lib/notify/notify.c/notify_ut
+ run_test "unittest_nvme" unittest_nvme
++if [ -z ${enable_raw} ]; then
+ run_test "unittest_log" $valgrind $testdir/lib/log/log.c/log_ut
++fi
+ run_test "unittest_lvol" $valgrind $testdir/lib/lvol/lvol.c/lvol_ut
+ if grep -q '#define SPDK_CONFIG_RDMA 1' $rootdir/include/spdk/config.h; then
+ 	run_test "unittest_nvme_rdma" $valgrind $testdir/lib/nvme/nvme_rdma.c/nvme_rdma_ut
+@@ -218,7 +233,9 @@ fi
+ 
+ run_test "unittest_scsi" unittest_scsi
+ run_test "unittest_sock" unittest_sock
++if [ -z ${enable_raw} ]; then
+ run_test "unittest_thread" $valgrind $testdir/lib/thread/thread.c/thread_ut
++fi
+ run_test "unittest_util" unittest_util
+ if grep -q '#define SPDK_CONFIG_VHOST 1' $rootdir/include/spdk/config.h; then
+ 	run_test "unittest_vhost" $valgrind $testdir/lib/vhost/vhost.c/vhost_ut
+-- 
+2.23.0
+
