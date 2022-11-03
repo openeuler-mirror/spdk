@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 5
+Release: 6
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -35,6 +35,7 @@ Patch24: 0024-Add-CUSE-switch-for-nvme-ctrlr.patch
 Patch25: 0025-Adapt-for-ES3000-serial-vendor-special-opcode-in-CUS.patch
 Patch26: 0026-Fix-race-condition-in-continuous-setup-and-teardown-.patch
 Patch27: 0027-Change-log-level-in-poll-timeout.patch
+Patch28: 0028-configure-add-CONFIG_HAVE_ARC4RANDOM.patch
 
 %define package_version %{version}-%{release}
 
@@ -206,6 +207,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Mon Oct 10 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-6
+- configure add CONFIG_HAVE_ARC4RANDOM
+
 * Tue May 24 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-5
 - Add support for HSAK
 
