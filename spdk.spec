@@ -3,7 +3,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 5
+Release: 6
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -44,6 +44,7 @@ BuildRequires: gcc gcc-c++ make
 BuildRequires: dpdk-devel, numactl-devel, ncurses-devel
 BuildRequires: libiscsi-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires: libibverbs-devel, librdmacm-devel
+BuildRequires: CUnit, CUnit-devel
 %if %{with doc}
 BuildRequires: doxygen mscgen graphviz
 %endif
@@ -102,7 +103,6 @@ BuildArch: noarch
 %build
 ./configure --prefix=%{_usr} \
 	--disable-tests \
-	--disable-unit-tests \
 	--without-crypto \
 	--without-isal \
 	--with-dpdk=/usr/lib64/dpdk/pmds-22.0 \
@@ -120,6 +120,11 @@ make -j`nproc` all
 %if %{with doc}
 make -C doc
 %endif
+
+%check
+sed -i "s/sudo//g" test/common/autotest_common.sh
+sed -i '/target_space=/aexport SPDK_TEST_STORAGE=$target_dir;return 0' test/common/autotest_common.sh
+test/unit/unittest.sh
 
 %install
 %make_install -j`nproc` prefix=%{_usr} libdir=%{_libdir} datadir=%{_datadir}
@@ -189,6 +194,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Sat Nov 5 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-6
+- Enable unittest
+
 * Mon Oct 24 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-5
 - Add the setup.sh script during installation
 
