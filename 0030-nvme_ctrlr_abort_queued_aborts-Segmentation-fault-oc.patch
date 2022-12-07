@@ -1,0 +1,38 @@
+From ade8e6254cb8720446dd38e2a29408ac57d7d5e6 Mon Sep 17 00:00:00 2001
+From: zhanghongtao <zhanghongtao22@huawei.com>
+Date: Wed, 7 Sep 2022 17:08:29 +0800
+Subject: [PATCH] nvme_ctrlr_abort_queued_aborts Segmentation fault occurs due
+ to recursion
+
+When ctrlr destruct,we need to abort queued aborts.
+Function nvme_ctrlr_abort_queued_aborts has a recursive call,
+ctrlr->queued_aborts has been processed in recursion.
+
+Signed-off-by: zhanghongtao <zhanghongtao22@huawei.com>
+---
+ lib/nvme/nvme_ctrlr.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/lib/nvme/nvme_ctrlr.c b/lib/nvme/nvme_ctrlr.c
+index 6c25f0d..a84affb 100644
+--- a/lib/nvme/nvme_ctrlr.c
++++ b/lib/nvme/nvme_ctrlr.c
+@@ -1344,7 +1344,15 @@ nvme_ctrlr_abort_queued_aborts(struct spdk_nvme_ctrlr *ctrlr)
+ 	struct nvme_request	*req, *tmp;
+ 	struct spdk_nvme_cpl	cpl = {};
+ 
++#ifdef SPDK_CONFIG_APP_RW
++	if (ctrlr->is_destructed == true) {
++		cpl.status.sc = SPDK_NVME_SC_SUCCESS;
++	} else {
++		cpl.status.sc = SPDK_NVME_SC_ABORTED_SQ_DELETION;
++	}
++#else
+ 	cpl.status.sc = SPDK_NVME_SC_ABORTED_SQ_DELETION;
++#endif
+ 	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+ 
+ 	STAILQ_FOREACH_SAFE(req, &ctrlr->queued_aborts, stailq, tmp) {
+-- 
+2.27.0
+
