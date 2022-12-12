@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 8
+Release: 9
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -39,6 +39,7 @@ Patch27: 0027-Change-log-level-in-poll-timeout.patch
 Patch28: 0028-configure-add-CONFIG_HAVE_ARC4RANDOM.patch
 Patch29: 0029-Enable-unittest-in-make-check.patch
 Patch30: 0030-nvme_ctrlr_abort_queued_aborts-Segmentation-fault-oc.patch
+Patch31: 0031-Fix-UAF-in-STAILQ_FOREACH.patch
 
 %define package_version %{version}-%{release}
 
@@ -213,6 +214,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Mon Dec 12 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-9
+- Fix UAF in STAILQ_FOREACH
+
 * Wed Dec 7 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-8
 - Fix Segmentation fault occurs due to recursion
 
