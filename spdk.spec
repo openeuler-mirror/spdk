@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 7
+Release: 8
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -38,6 +38,7 @@ Patch26: 0026-Fix-race-condition-in-continuous-setup-and-teardown-.patch
 Patch27: 0027-Change-log-level-in-poll-timeout.patch
 Patch28: 0028-configure-add-CONFIG_HAVE_ARC4RANDOM.patch
 Patch29: 0029-Enable-unittest-in-make-check.patch
+Patch30: 0030-nvme_ctrlr_abort_queued_aborts-Segmentation-fault-oc.patch
 
 %define package_version %{version}-%{release}
 
@@ -212,6 +213,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Wed Dec 7 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-8
+- Fix Segmentation fault occurs due to recursion
+
 * Tue Nov 1 2022 Weifeng Su <suweifeng1@huawei.com> - 21.01.1-7
 - Enable unittest
 
