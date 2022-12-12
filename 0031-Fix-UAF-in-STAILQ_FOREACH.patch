@@ -1,0 +1,52 @@
+From 9c74cca9c8572dabe472d0f2b033bdc84dfb8882 Mon Sep 17 00:00:00 2001
+From: zhanghongtao <zhanghongtao22@huawei.com>
+Date: Tue, 25 Oct 2022 16:24:44 +0800
+Subject: [PATCH] Fix UAF in STAILQ_FOREACH
+
+function spdk_nvme_ctrlr_free_io_qpair will free and memset qpair,
+The loop variable is destroyed in the loop.
+---
+ lib/nvme/nvme_transport.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/lib/nvme/nvme_transport.c b/lib/nvme/nvme_transport.c
+index 3050163..c35f29f 100644
+--- a/lib/nvme/nvme_transport.c
++++ b/lib/nvme/nvme_transport.c
+@@ -494,6 +494,9 @@ nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_gr
+ {
+ 	struct spdk_nvme_qpair *qpair;
+ 	int64_t rc;
++#ifdef SPDK_CONFIG_APP_RW
++	struct spdk_nvme_qpair *tmp_qpair;
++#endif
+ 
+ 	tgroup->in_completion_context = true;
+ 	rc = tgroup->transport->ops.poll_group_process_completions(tgroup, completions_per_qpair,
+@@ -502,7 +505,11 @@ nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_gr
+ 
+ 	if (spdk_unlikely(tgroup->num_qpairs_to_delete > 0)) {
+ 		/* deleted qpairs are more likely to be in the disconnected qpairs list. */
++#ifdef SPDK_CONFIG_APP_RW
++		STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
++#else
+ 		STAILQ_FOREACH(qpair, &tgroup->disconnected_qpairs, poll_group_stailq) {
++#endif
+ 			if (spdk_unlikely(qpair->delete_after_completion_context)) {
+ 				spdk_nvme_ctrlr_free_io_qpair(qpair);
+ 				if (--tgroup->num_qpairs_to_delete == 0) {
+@@ -511,7 +518,11 @@ nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_gr
+ 			}
+ 		}
+ 
++#ifdef SPDK_CONFIG_APP_RW
++		STAILQ_FOREACH_SAFE(qpair, &tgroup->connected_qpairs, poll_group_stailq, tmp_qpair) {
++#else
+ 		STAILQ_FOREACH(qpair, &tgroup->connected_qpairs, poll_group_stailq) {
++#endif
+ 			if (spdk_unlikely(qpair->delete_after_completion_context)) {
+ 				spdk_nvme_ctrlr_free_io_qpair(qpair);
+ 				if (--tgroup->num_qpairs_to_delete == 0) {
+-- 
+2.27.0
+
