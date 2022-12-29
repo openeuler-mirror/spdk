@@ -1,0 +1,1190 @@
+From 9151162b03758efcbe3c269c72222d6f4f3fd2f5 Mon Sep 17 00:00:00 2001
+From: Kemeng Shi <shikemeng@huawei.com>
+Date: Thu, 5 Jan 2023 16:20:42 +0800
+Subject: [PATCH] Upgrade ocf lib and ocf bdev to spdk 22.05
+
+Upgrade ocf lib and ocf bdev to spdk 22.05. This patch overwrites
+directories module/bdev/ocf and lib/env_ocf with directories in
+SPDK 22.05. There are 19 commits which modify files in directories
+module/bdev/ocf and lib/env_ocf. All commits are list below:
+7aa92ad513ff38dac776b1a92c15960eda44f872
+90aba31ac3ace0136b3363768003dba9997f0983
+84863d99a8354f300b7f36f89ea41497e859413a
+494b1ba8e6cd3eb428d8b6dfb1328196f18846fb
+a2340f36fa9462d54ea39eb6495ab4800ed1e038
+c39647df83e4be9bcc49025132c48bf2414ef8b1
+047c067c05ff22df06c053990998184b8a940514
+cc6920a4763d4b9a43aa40583c8397d8f14fa100
+1960ef167a14cf58587f6a47e06175ac8f6dfed5
+502a2d7512e8a59312d0ab127ab85f0f4f2fa412
+3f4474d5cbd0c2334151151fdd4c21fbb0091840
+9544fe07aad355262fcaa65dc27f9965a8ea4617
+074a63d507ee64d3e35cc64533f9f639cbceae40
+975852a079578816478a906717d1cf45fc97ddf3
+8fcb8b966d93950e0aaccce886d6722e865833a6
+5bdaec63224663ecd58e9d4c82589f17b0afc5e0
+37028231dbd504e2e90383278b9f50a0cb066857
+80b80d24827a6038bb70eb90467b1044cd5aff0e
+e4070ee0e012c345f4c059f125f4f9ce3be66690
+
+There are changes outside directories module/bdev/ocf and lib/env_ocf,
+include:
+1. spelling fix
+2. version number increase
+3. add rpc method
+4. remove deprecated RPC names
+OCF can work normally without these changes, so this commit only keep
+changes inside diretories module/bdev/ocf and lib/env_cf
+
+There are only rpc tests added along with ocf upgrade. As we don't keep the
+added rpc method, there is no need to update the ocf test to SPDK 22.05.
+
+Signed-off-by: Kemeng Shi <shikemeng@huawei.com>
+---
+ lib/env_ocf/mpool.c             | 169 ++++++++++++++++++++++++++++++++
+ lib/env_ocf/mpool.h             |  64 ++++++++++++
+ lib/env_ocf/ocf_env.c           |  40 ++++++--
+ lib/env_ocf/ocf_env.h           |  12 ++-
+ lib/env_ocf/ocf_env_list.h      |   2 +-
+ module/bdev/ocf/Makefile        |   2 +-
+ module/bdev/ocf/ctx.c           |  50 ----------
+ module/bdev/ocf/ctx.h           |   1 +
+ module/bdev/ocf/data.h          |   1 +
+ module/bdev/ocf/utils.c         |  26 +++++
+ module/bdev/ocf/utils.h         |   6 ++
+ module/bdev/ocf/vbdev_ocf.c     | 164 ++++++++++++++++++++++++-------
+ module/bdev/ocf/vbdev_ocf.h     |  18 +++-
+ module/bdev/ocf/vbdev_ocf_rpc.c | 140 +++++++++++++++++++++++++-
+ module/bdev/ocf/volume.c        |  14 ++-
+ module/bdev/ocf/volume.h        |   1 -
+ 16 files changed, 602 insertions(+), 108 deletions(-)
+ create mode 100644 lib/env_ocf/mpool.c
+ create mode 100644 lib/env_ocf/mpool.h
+
+diff --git a/lib/env_ocf/mpool.c b/lib/env_ocf/mpool.c
+new file mode 100644
+index 000000000..adc1abce7
+--- /dev/null
++++ b/lib/env_ocf/mpool.c
+@@ -0,0 +1,169 @@
++/*-
++ *   BSD LICENSE
++ *
++ *   Copyright (c) Intel Corporation.
++ *   All rights reserved.
++ *
++ *   Redistribution and use in source and binary forms, with or without
++ *   modification, are permitted provided that the following conditions
++ *   are met:
++ *
++ *     * Redistributions of source code must retain the above copyright
++ *       notice, this list of conditions and the following disclaimer.
++ *     * Redistributions in binary form must reproduce the above copyright
++ *       notice, this list of conditions and the following disclaimer in
++ *       the documentation and/or other materials provided with the
++ *       distribution.
++ *     * Neither the name of Intel Corporation nor the names of its
++ *       contributors may be used to endorse or promote products derived
++ *       from this software without specific prior written permission.
++ *
++ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "spdk/env.h"
++#include "ocf_env.h"
++
++#include "mpool.h"
++
++struct env_mpool {
++	env_allocator *allocator[env_mpool_max];
++	/* Handles to memory pools */
++
++	uint32_t hdr_size;
++	/* Data header size (constant allocation part) */
++
++	uint32_t elem_size;
++	/* Per element size increment (variable allocation part) */
++
++	uint32_t mpool_max;
++	/* Max mpool allocation order */
++
++	bool fallback;
++	/* Fallback to vmalloc */
++};
++
++struct env_mpool *env_mpool_create(uint32_t hdr_size, uint32_t elem_size,
++				   int flags, int mpool_max, bool fallback,
++				   const uint32_t limits[env_mpool_max],
++				   const char *name_prefix, bool zero)
++{
++	int i;
++	char name[OCF_ALLOCATOR_NAME_MAX] = {};
++	int ret;
++	int size;
++
++	struct env_mpool *mpool = env_zalloc(sizeof(struct env_mpool), ENV_MEM_NOIO);
++	if (!mpool) {
++		return NULL;
++	}
++
++	mpool->hdr_size = hdr_size;
++	mpool->elem_size = elem_size;
++	mpool->mpool_max = mpool_max;
++	mpool->fallback = fallback;
++
++	for (i = 0; i < min(env_mpool_max, mpool_max + 1); i++) {
++		ret = snprintf(name, sizeof(name), "%s_%u", name_prefix, (1 << i));
++		if (ret < 0 || ret >= (int)sizeof(name)) {
++			goto err;
++		}
++
++		size = hdr_size + (elem_size * (1 << i));
++
++		mpool->allocator[i] = env_allocator_create_extended(size, name,
++				      limits ? limits[i] : -1, zero);
++
++		if (!mpool->allocator[i]) {
++			goto err;
++		}
++	}
++
++	return mpool;
++
++err:
++	env_mpool_destroy(mpool);
++	return NULL;
++}
++
++void env_mpool_destroy(struct env_mpool *mpool)
++{
++	if (mpool) {
++		int i;
++
++		for (i = 0; i < env_mpool_max; i++) {
++			if (mpool->allocator[i]) {
++				env_allocator_destroy(mpool->allocator[i]);
++			}
++		}
++
++		env_free(mpool);
++	}
++}
++
++static env_allocator *env_mpool_get_allocator(struct env_mpool *mpool,
++		uint32_t count)
++{
++	unsigned int idx;
++
++	if (unlikely(count == 0)) {
++		return mpool->allocator[env_mpool_1];
++	}
++
++	idx = 31 - __builtin_clz(count);
++
++	if (__builtin_ffs(count) <= idx) {
++		idx++;
++	}
++
++	if (idx >= env_mpool_max || idx > mpool->mpool_max) {
++		return NULL;
++	}
++
++	return mpool->allocator[idx];
++}
++
++void *env_mpool_new(struct env_mpool *mpool, uint32_t count)
++{
++	void *items = NULL;
++	env_allocator *allocator;
++	size_t size = mpool->hdr_size + (mpool->elem_size * count);
++
++	allocator = env_mpool_get_allocator(mpool, count);
++
++	if (allocator) {
++		items = env_allocator_new(allocator);
++	} else if (mpool->fallback) {
++		items = env_vmalloc(size);
++	}
++
++	return items;
++}
++
++bool env_mpool_del(struct env_mpool *mpool,
++		   void *items, uint32_t count)
++{
++	env_allocator *allocator;
++
++	allocator = env_mpool_get_allocator(mpool, count);
++
++	if (allocator) {
++		env_allocator_del(allocator, items);
++	} else if (mpool->fallback) {
++		env_vfree(items);
++	} else {
++		return false;
++	}
++
++	return true;
++}
+diff --git a/lib/env_ocf/mpool.h b/lib/env_ocf/mpool.h
+new file mode 100644
+index 000000000..5b9880e2d
+--- /dev/null
++++ b/lib/env_ocf/mpool.h
+@@ -0,0 +1,64 @@
++/*-
++ *   BSD LICENSE
++ *
++ *   Copyright (c) Intel Corporation.
++ *   All rights reserved.
++ *
++ *   Redistribution and use in source and binary forms, with or without
++ *   modification, are permitted provided that the following conditions
++ *   are met:
++ *
++ *     * Redistributions of source code must retain the above copyright
++ *       notice, this list of conditions and the following disclaimer.
++ *     * Redistributions in binary form must reproduce the above copyright
++ *       notice, this list of conditions and the following disclaimer in
++ *       the documentation and/or other materials provided with the
++ *       distribution.
++ *     * Neither the name of Intel Corporation nor the names of its
++ *       contributors may be used to endorse or promote products derived
++ *       from this software without specific prior written permission.
++ *
++ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#ifndef OCF_MPOOL_H
++#define OCF_MPOOL_H
++
++enum {
++	env_mpool_1,
++	env_mpool_2,
++	env_mpool_4,
++	env_mpool_8,
++	env_mpool_16,
++	env_mpool_32,
++	env_mpool_64,
++	env_mpool_128,
++
++	env_mpool_max
++};
++
++struct env_mpool;
++
++struct env_mpool *env_mpool_create(uint32_t hdr_size, uint32_t elem_size,
++				   int flags, int mpool_max, bool fallback,
++				   const uint32_t limits[env_mpool_max],
++				   const char *name_perfix, bool zero);
++
++void env_mpool_destroy(struct env_mpool *mpools);
++
++void *env_mpool_new(struct env_mpool *mpool, uint32_t count);
++
++bool env_mpool_del(struct env_mpool *mpool,
++		   void *items, uint32_t count);
++
++#endif
+diff --git a/lib/env_ocf/ocf_env.c b/lib/env_ocf/ocf_env.c
+index c25aec90c..075588a4f 100644
+--- a/lib/env_ocf/ocf_env.c
++++ b/lib/env_ocf/ocf_env.c
+@@ -42,9 +42,18 @@
+  * It depends on memory usage of OCF which
+  * in itself depends on the workload
+  * It is a big number because OCF uses allocators
+- * for every request it sends and recieves
++ * for every request it sends and receives
++ *
++ * The value of 16383 is tested to work on 24 caches
++ * running IO of io_size=512 and io_depth=512, which
++ * should be more than enough for any real life scenario.
++ * Increase this value if needed. It will result in
++ * more memory being used initially on SPDK app start,
++ * when compiled with OCF support.
+  */
+-#define ENV_ALLOCATOR_NBUFS 32767
++#define ENV_ALLOCATOR_NBUFS 16383
++
++#define GET_ELEMENTS_COUNT(_limit) (_limit < 0 ? ENV_ALLOCATOR_NBUFS : _limit)
+ 
+ /* Use unique index for env allocators */
+ static env_atomic g_env_allocator_index = 0;
+@@ -54,7 +63,11 @@ env_allocator_new(env_allocator *allocator)
+ {
+ 	void *mem = spdk_mempool_get(allocator->mempool);
+ 
+-	if (spdk_likely(mem)) {
++	if (spdk_unlikely(!mem)) {
++		return NULL;
++	}
++
++	if (allocator->zero) {
+ 		memset(mem, 0, allocator->element_size);
+ 	}
+ 
+@@ -62,12 +75,19 @@ env_allocator_new(env_allocator *allocator)
+ }
+ 
+ env_allocator *
+-env_allocator_create(uint32_t size, const char *name)
++env_allocator_create(uint32_t size, const char *name, bool zero)
++{
++	return env_allocator_create_extended(size, name, -1, zero);
++}
++
++env_allocator *
++env_allocator_create_extended(uint32_t size, const char *name, int limit, bool zero)
+ {
+ 	env_allocator *allocator;
+-	char qualified_name[128] = {0};
++	char qualified_name[OCF_ALLOCATOR_NAME_MAX] = {0};
+ 
+-	snprintf(qualified_name, 128, "ocf_env_%d", env_atomic_inc_return(&g_env_allocator_index));
++	snprintf(qualified_name, OCF_ALLOCATOR_NAME_MAX, "ocf_env_%d:%s",
++		 env_atomic_inc_return(&g_env_allocator_index), name);
+ 
+ 	allocator = calloc(1, sizeof(*allocator));
+ 	if (!allocator) {
+@@ -75,7 +95,7 @@ env_allocator_create(uint32_t size, const char *name)
+ 	}
+ 
+ 	allocator->mempool = spdk_mempool_create(qualified_name,
+-			     ENV_ALLOCATOR_NBUFS, size,
++			     GET_ELEMENTS_COUNT(limit), size,
+ 			     SPDK_MEMPOOL_DEFAULT_CACHE_SIZE,
+ 			     SPDK_ENV_SOCKET_ID_ANY);
+ 
+@@ -86,6 +106,8 @@ env_allocator_create(uint32_t size, const char *name)
+ 	}
+ 
+ 	allocator->element_size = size;
++	allocator->element_count = GET_ELEMENTS_COUNT(limit);
++	allocator->zero = zero;
+ 
+ 	return allocator;
+ }
+@@ -100,7 +122,7 @@ void
+ env_allocator_destroy(env_allocator *allocator)
+ {
+ 	if (allocator) {
+-		if (ENV_ALLOCATOR_NBUFS - spdk_mempool_count(allocator->mempool)) {
++		if (allocator->element_count - spdk_mempool_count(allocator->mempool)) {
+ 			SPDK_ERRLOG("Not all objects deallocated\n");
+ 			assert(false);
+ 		}
+@@ -147,7 +169,7 @@ static void __attribute__((destructor)) deinit_execution_context(void)
+ 	free(exec_context_mutex);
+ }
+ 
+-/* get_execuction_context must assure that after the call finishes, the caller
++/* get_execution_context must assure that after the call finishes, the caller
+  * will not get preempted from current execution context. For userspace env
+  * we simulate this behavior by acquiring per execution context mutex. As a
+  * result the caller might actually get preempted, but no other thread will
+diff --git a/lib/env_ocf/ocf_env.h b/lib/env_ocf/ocf_env.h
+index 4484954de..d5efd1483 100644
+--- a/lib/env_ocf/ocf_env.h
++++ b/lib/env_ocf/ocf_env.h
+@@ -54,6 +54,8 @@
+ #include "ocf_env_list.h"
+ #include "ocf/ocf_err.h"
+ 
++#include "mpool.h"
++
+ typedef uint8_t u8;
+ typedef uint16_t u16;
+ typedef uint32_t u32;
+@@ -143,7 +145,7 @@ static inline void *env_vmalloc(size_t size)
+ static inline void *env_vzalloc(size_t size)
+ {
+ 	/* TODO: raw_ram init can request huge amount of memory to store
+-	 * hashtable in it. need to ensure that allocation succedds */
++	 * hashtable in it. need to ensure that allocation succeeds */
+ 	return spdk_zmalloc(size, 0, NULL, SPDK_ENV_LCORE_ID_ANY,
+ 			    SPDK_MALLOC_DMA);
+ }
+@@ -176,14 +178,18 @@ static inline uint64_t env_get_free_memory(void)
+ 
+ /* *** ALLOCATOR *** */
+ 
+-#define OCF_ALLOCATOR_NAME_MAX 128
++#define OCF_ALLOCATOR_NAME_MAX 24
+ 
+ typedef struct {
+ 	struct spdk_mempool *mempool;
+ 	size_t element_size;
++	size_t element_count;
++	bool zero;
+ } env_allocator;
+ 
+-env_allocator *env_allocator_create(uint32_t size, const char *name);
++env_allocator *env_allocator_create_extended(uint32_t size, const char *name, int limit, bool zero);
++
++env_allocator *env_allocator_create(uint32_t size, const char *name, bool zero);
+ 
+ void env_allocator_destroy(env_allocator *allocator);
+ 
+diff --git a/lib/env_ocf/ocf_env_list.h b/lib/env_ocf/ocf_env_list.h
+index e5f60d6c3..5d728032f 100644
+--- a/lib/env_ocf/ocf_env_list.h
++++ b/lib/env_ocf/ocf_env_list.h
+@@ -43,7 +43,7 @@
+ struct list_head {
+ 	struct list_head *next;
+ 	struct list_head *prev;
+-};
++} __attribute__((aligned(64)));
+ 
+ /**
+  * start an empty list
+diff --git a/module/bdev/ocf/Makefile b/module/bdev/ocf/Makefile
+index b931de106..8ebaa49da 100644
+--- a/module/bdev/ocf/Makefile
++++ b/module/bdev/ocf/Makefile
+@@ -35,7 +35,7 @@ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+ 
+ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+ 
+-SO_VER := 2
++SO_VER := 4
+ SO_MINOR := 0
+ 
+ CFLAGS += $(ENV_CFLAGS) -I$(SPDK_ROOT_DIR)/lib/env_ocf -I$(SPDK_ROOT_DIR)/lib/env_ocf/include
+diff --git a/module/bdev/ocf/ctx.c b/module/bdev/ocf/ctx.c
+index ed9991752..8666617e8 100644
+--- a/module/bdev/ocf/ctx.c
++++ b/module/bdev/ocf/ctx.c
+@@ -37,7 +37,6 @@
+ #include "spdk/log.h"
+ 
+ #include "ctx.h"
+-#include "ocf_env.h"
+ #include "data.h"
+ 
+ ocf_ctx_t vbdev_ocf_ctx;
+@@ -432,49 +431,6 @@ vbdev_ocf_ctx_cleaner_kick(ocf_cleaner_t cleaner)
+ 	priv->poller = SPDK_POLLER_REGISTER(cleaner_poll, cleaner, 0);
+ }
+ 
+-static void
+-vbdev_ocf_md_kick(void *ctx)
+-{
+-	ocf_metadata_updater_t mu = ctx;
+-	ocf_cache_t cache = ocf_metadata_updater_get_cache(mu);
+-
+-	ocf_metadata_updater_run(mu);
+-
+-	/* Decrease cache ref count after metadata has been updated */
+-	ocf_mngt_cache_put(cache);
+-}
+-
+-static int
+-vbdev_ocf_volume_updater_init(ocf_metadata_updater_t mu)
+-{
+-	struct spdk_thread *md_thread = spdk_get_thread();
+-
+-	ocf_metadata_updater_set_priv(mu, md_thread);
+-
+-	return 0;
+-}
+-
+-static void
+-vbdev_ocf_volume_updater_stop(ocf_metadata_updater_t mu)
+-{
+-
+-}
+-
+-static void
+-vbdev_ocf_volume_updater_kick(ocf_metadata_updater_t mu)
+-{
+-	struct spdk_thread *md_thread = ocf_metadata_updater_get_priv(mu);
+-	ocf_cache_t cache = ocf_metadata_updater_get_cache(mu);
+-
+-	/* Increase cache ref count prior sending a message to a thread
+-	 * for metadata update */
+-	ocf_mngt_cache_get(cache);
+-
+-	/* We need to send message to updater thread because
+-	 * kick can happen from any thread */
+-	spdk_thread_send_msg(md_thread, vbdev_ocf_md_kick, mu);
+-}
+-
+ /* This function is main way by which OCF communicates with user
+  * We don't want to use SPDK_LOG here because debugging information that is
+  * associated with every print message is not helpful in callback that only prints info
+@@ -528,12 +484,6 @@ static const struct ocf_ctx_config vbdev_ocf_ctx_cfg = {
+ 			.secure_erase = vbdev_ocf_ctx_data_secure_erase,
+ 		},
+ 
+-		.metadata_updater = {
+-			.init = vbdev_ocf_volume_updater_init,
+-			.stop = vbdev_ocf_volume_updater_stop,
+-			.kick = vbdev_ocf_volume_updater_kick,
+-		},
+-
+ 		.cleaner = {
+ 			.init = vbdev_ocf_ctx_cleaner_init,
+ 			.stop = vbdev_ocf_ctx_cleaner_stop,
+diff --git a/module/bdev/ocf/ctx.h b/module/bdev/ocf/ctx.h
+index 446ac8d8f..4419ef5e5 100644
+--- a/module/bdev/ocf/ctx.h
++++ b/module/bdev/ocf/ctx.h
+@@ -35,6 +35,7 @@
+ #define VBDEV_OCF_CTX_H
+ 
+ #include <ocf/ocf.h>
++#include "ocf_env.h"
+ #include "spdk/thread.h"
+ 
+ extern ocf_ctx_t vbdev_ocf_ctx;
+diff --git a/module/bdev/ocf/data.h b/module/bdev/ocf/data.h
+index 7ed5adcef..56e8398e0 100644
+--- a/module/bdev/ocf/data.h
++++ b/module/bdev/ocf/data.h
+@@ -34,6 +34,7 @@
+ #ifndef VBDEV_OCF_DATA_H
+ #define VBDEV_OCF_DATA_H
+ 
++#include "ocf_env.h"
+ #include "spdk/bdev_module.h"
+ 
+ struct bdev_ocf_data {
+diff --git a/module/bdev/ocf/utils.c b/module/bdev/ocf/utils.c
+index 3a1df3c9e..751f13d8c 100644
+--- a/module/bdev/ocf/utils.c
++++ b/module/bdev/ocf/utils.c
+@@ -32,6 +32,7 @@
+  */
+ 
+ #include "spdk/stdinc.h"
++#include "spdk/log.h"
+ 
+ #include "utils.h"
+ #include "vbdev_ocf.h"
+@@ -45,6 +46,12 @@ static char *cache_modes[ocf_cache_mode_max] = {
+ 	[ocf_cache_mode_wo] = "wo",
+ };
+ 
++static char *seqcutoff_policies[ocf_seq_cutoff_policy_max] = {
++	[ocf_seq_cutoff_policy_always] = "always",
++	[ocf_seq_cutoff_policy_full] = "full",
++	[ocf_seq_cutoff_policy_never] = "never",
++};
++
+ ocf_cache_mode_t
+ ocf_get_cache_mode(const char *cache_mode)
+ {
+@@ -69,6 +76,25 @@ ocf_get_cache_modename(ocf_cache_mode_t mode)
+ 	}
+ }
+ 
++int
++ocf_get_cache_line_size(ocf_cache_t cache)
++{
++	return ocf_cache_get_line_size(cache) / KiB;
++}
++
++ocf_seq_cutoff_policy
++ocf_get_seqcutoff_policy(const char *policy_name)
++{
++	int policy;
++
++	for (policy = 0; policy < ocf_seq_cutoff_policy_max; policy++)
++		if (!strcmp(policy_name, seqcutoff_policies[policy])) {
++			return policy;
++		}
++
++	return ocf_seq_cutoff_policy_max;
++}
++
+ int
+ vbdev_ocf_mngt_start(struct vbdev_ocf *vbdev, vbdev_ocf_mngt_fn *path,
+ 		     vbdev_ocf_mngt_callback cb, void *cb_arg)
+diff --git a/module/bdev/ocf/utils.h b/module/bdev/ocf/utils.h
+index 73bf6c93a..37255bcdf 100644
+--- a/module/bdev/ocf/utils.h
++++ b/module/bdev/ocf/utils.h
+@@ -40,6 +40,12 @@
+ ocf_cache_mode_t ocf_get_cache_mode(const char *cache_mode);
+ const char *ocf_get_cache_modename(ocf_cache_mode_t mode);
+ 
++/* Get cache line size in KiB units */
++int ocf_get_cache_line_size(ocf_cache_t cache);
++
++/* Get sequential cutoff policy by name */
++ocf_seq_cutoff_policy ocf_get_seqcutoff_policy(const char *policy_name);
++
+ /* Initiate management operation
+  * Receives NULL terminated array of functions (path)
+  * and callback (cb)
+diff --git a/module/bdev/ocf/vbdev_ocf.c b/module/bdev/ocf/vbdev_ocf.c
+index 08f5aed22..41f1f7325 100644
+--- a/module/bdev/ocf/vbdev_ocf.c
++++ b/module/bdev/ocf/vbdev_ocf.c
+@@ -198,8 +198,14 @@ static void
+ unregister_finish(struct vbdev_ocf *vbdev)
+ {
+ 	spdk_bdev_destruct_done(&vbdev->exp_bdev, vbdev->state.stop_status);
+-	ocf_mngt_cache_put(vbdev->ocf_cache);
+-	vbdev_ocf_cache_ctx_put(vbdev->cache_ctx);
++
++	if (vbdev->ocf_cache) {
++		ocf_mngt_cache_put(vbdev->ocf_cache);
++	}
++
++	if (vbdev->cache_ctx) {
++		vbdev_ocf_cache_ctx_put(vbdev->cache_ctx);
++	}
+ 	vbdev_ocf_mngt_continue(vbdev, 0);
+ }
+ 
+@@ -559,7 +565,7 @@ vbdev_ocf_io_submit_cb(struct ocf_io *io, int error)
+ 
+ 	if (error == 0) {
+ 		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
+-	} else if (error == -ENOMEM) {
++	} else if (error == -OCF_ERR_NO_MEM) {
+ 		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_NOMEM);
+ 	} else {
+ 		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
+@@ -740,7 +746,7 @@ vbdev_ocf_dump_info_json(void *opaque, struct spdk_json_write_ctx *w)
+ 	spdk_json_write_named_string(w, "mode",
+ 				     ocf_get_cache_modename(ocf_cache_get_mode(vbdev->ocf_cache)));
+ 	spdk_json_write_named_uint32(w, "cache_line_size",
+-				     ocf_cache_get_line_size(vbdev->ocf_cache));
++				     ocf_get_cache_line_size(vbdev->ocf_cache));
+ 	spdk_json_write_named_bool(w, "metadata_volatile",
+ 				   vbdev->cfg.cache.metadata_volatile);
+ 
+@@ -761,7 +767,7 @@ vbdev_ocf_write_json_config(struct spdk_bdev *bdev, struct spdk_json_write_ctx *
+ 	spdk_json_write_named_string(w, "mode",
+ 				     ocf_get_cache_modename(ocf_cache_get_mode(vbdev->ocf_cache)));
+ 	spdk_json_write_named_uint32(w, "cache_line_size",
+-				     ocf_cache_get_line_size(vbdev->ocf_cache));
++				     ocf_get_cache_line_size(vbdev->ocf_cache));
+ 	spdk_json_write_named_string(w, "cache_bdev_name", vbdev->cache.name);
+ 	spdk_json_write_named_string(w, "core_bdev_name", vbdev->core.name);
+ 	spdk_json_write_object_end(w);
+@@ -1007,12 +1013,25 @@ static void
+ start_cache_cmpl(ocf_cache_t cache, void *priv, int error)
+ {
+ 	struct vbdev_ocf *vbdev = priv;
++	uint64_t mem_needed;
+ 
+ 	ocf_mngt_cache_unlock(cache);
+ 
+ 	if (error) {
+ 		SPDK_ERRLOG("Error %d during start cache %s, starting rollback\n",
+ 			    error, vbdev->name);
++
++		if (error == -OCF_ERR_NO_MEM) {
++			ocf_mngt_get_ram_needed(cache, &vbdev->cfg.device, &mem_needed);
++
++			SPDK_NOTICELOG("Try to increase hugepage memory size or cache line size. "
++				       "For your configuration:\nDevice size: %"PRIu64" bytes\n"
++				       "Cache line size: %"PRIu64" bytes\nFree memory needed to start "
++				       "cache: %"PRIu64" bytes\n", vbdev->cache.bdev->blockcnt *
++				       vbdev->cache.bdev->blocklen, vbdev->cfg.cache.cache_line_size,
++				       mem_needed);
++		}
++
+ 		vbdev_ocf_mngt_exit(vbdev, unregister_path_dirty, error);
+ 		return;
+ 	}
+@@ -1049,6 +1068,8 @@ static void
+ start_cache(struct vbdev_ocf *vbdev)
+ {
+ 	ocf_cache_t existing;
++	uint32_t cache_block_size = vbdev->cache.bdev->blocklen;
++	uint32_t core_block_size = vbdev->core.bdev->blocklen;
+ 	int rc;
+ 
+ 	if (is_ocf_cache_running(vbdev)) {
+@@ -1056,6 +1077,13 @@ start_cache(struct vbdev_ocf *vbdev)
+ 		return;
+ 	}
+ 
++	if (cache_block_size > core_block_size) {
++		SPDK_ERRLOG("Cache bdev block size (%d) is bigger then core bdev block size (%d)\n",
++			    cache_block_size, core_block_size);
++		vbdev_ocf_mngt_exit(vbdev, unregister_path_dirty, -EINVAL);
++		return;
++	}
++
+ 	existing = get_other_cache_instance(vbdev);
+ 	if (existing) {
+ 		SPDK_NOTICELOG("OCF bdev %s connects to existing cache device %s\n",
+@@ -1077,8 +1105,9 @@ start_cache(struct vbdev_ocf *vbdev)
+ 	vbdev_ocf_cache_ctx_get(vbdev->cache_ctx);
+ 	pthread_mutex_init(&vbdev->cache_ctx->lock, NULL);
+ 
+-	rc = ocf_mngt_cache_start(vbdev_ocf_ctx, &vbdev->ocf_cache, &vbdev->cfg.cache);
++	rc = ocf_mngt_cache_start(vbdev_ocf_ctx, &vbdev->ocf_cache, &vbdev->cfg.cache, NULL);
+ 	if (rc) {
++		SPDK_ERRLOG("Could not start cache %s: %d\n", vbdev->name, rc);
+ 		vbdev_ocf_mngt_exit(vbdev, unregister_path_dirty, rc);
+ 		return;
+ 	}
+@@ -1133,18 +1162,15 @@ init_vbdev_config(struct vbdev_ocf *vbdev)
+ {
+ 	struct vbdev_ocf_config *cfg = &vbdev->cfg;
+ 
++	/* Initialize OCF defaults first */
++	ocf_mngt_cache_device_config_set_default(&cfg->device);
++	ocf_mngt_cache_config_set_default(&cfg->cache);
++	ocf_mngt_core_config_set_default(&cfg->core);
++
+ 	snprintf(cfg->cache.name, sizeof(cfg->cache.name), "%s", vbdev->name);
+ 	snprintf(cfg->core.name, sizeof(cfg->core.name), "%s", vbdev->core.name);
+ 
+-	/* TODO [metadata]: make configurable with persistent
+-	 * metadata support */
+-	cfg->cache.metadata_volatile = false;
+-
+-	/* This are suggested values that
+-	 * should be sufficient for most use cases */
+-	cfg->cache.backfill.max_queue_size = 65536;
+-	cfg->cache.backfill.queue_unblock_size = 60000;
+-
++	cfg->device.open_cores = false;
+ 	cfg->device.perform_test = false;
+ 	cfg->device.discard_on_start = false;
+ 
+@@ -1200,10 +1226,28 @@ init_vbdev(const char *vbdev_name,
+ 		goto error_mem;
+ 	}
+ 
++	vbdev->name = strdup(vbdev_name);
++	if (!vbdev->name) {
++		goto error_mem;
++	}
++
++	vbdev->cache.name = strdup(cache_name);
++	if (!vbdev->cache.name) {
++		goto error_mem;
++	}
++
++	vbdev->core.name = strdup(core_name);
++	if (!vbdev->core.name) {
++		goto error_mem;
++	}
++
+ 	vbdev->cache.parent = vbdev;
+ 	vbdev->core.parent = vbdev;
+ 	vbdev->cache.is_cache = true;
+ 	vbdev->core.is_cache = false;
++	vbdev->cfg.loadq = loadq;
++
++	init_vbdev_config(vbdev);
+ 
+ 	if (cache_mode_name) {
+ 		vbdev->cfg.cache.cache_mode
+@@ -1230,23 +1274,6 @@ init_vbdev(const char *vbdev_name,
+ 	vbdev->cfg.device.cache_line_size = set_cache_line_size;
+ 	vbdev->cfg.cache.cache_line_size = set_cache_line_size;
+ 
+-	vbdev->name = strdup(vbdev_name);
+-	if (!vbdev->name) {
+-		goto error_mem;
+-	}
+-
+-	vbdev->cache.name = strdup(cache_name);
+-	if (!vbdev->cache.name) {
+-		goto error_mem;
+-	}
+-
+-	vbdev->core.name = strdup(core_name);
+-	if (!vbdev->core.name) {
+-		goto error_mem;
+-	}
+-
+-	vbdev->cfg.loadq = loadq;
+-	init_vbdev_config(vbdev);
+ 	TAILQ_INSERT_TAIL(&g_ocf_vbdev_head, vbdev, tailq);
+ 	return rc;
+ 
+@@ -1296,7 +1323,7 @@ vbdev_ocf_module_fini(void)
+ 	vbdev_ocf_ctx_cleanup();
+ }
+ 
+-/* When base device gets unpluged this is called
++/* When base device gets unplugged this is called
+  * We will unregister cache vbdev here
+  * When cache device is removed, we delete every OCF bdev that used it */
+ static void
+@@ -1466,6 +1493,77 @@ vbdev_ocf_construct(const char *vbdev_name,
+ 	}
+ }
+ 
++/* Set new cache mode on OCF cache */
++void
++vbdev_ocf_set_cache_mode(struct vbdev_ocf *vbdev,
++			 const char *cache_mode_name,
++			 void (*cb)(int, struct vbdev_ocf *, void *),
++			 void *cb_arg)
++{
++	ocf_cache_t cache;
++	ocf_cache_mode_t cache_mode;
++	int rc;
++
++	cache = vbdev->ocf_cache;
++	cache_mode = ocf_get_cache_mode(cache_mode_name);
++
++	rc = ocf_mngt_cache_trylock(cache);
++	if (rc) {
++		cb(rc, vbdev, cb_arg);
++		return;
++	}
++
++	rc = ocf_mngt_cache_set_mode(cache, cache_mode);
++	ocf_mngt_cache_unlock(cache);
++	cb(rc, vbdev, cb_arg);
++}
++
++/* Set sequential cutoff parameters on OCF cache */
++void
++vbdev_ocf_set_seqcutoff(struct vbdev_ocf *vbdev, const char *policy_name, uint32_t threshold,
++			uint32_t promotion_count, void (*cb)(int, void *), void *cb_arg)
++{
++	ocf_cache_t cache;
++	ocf_seq_cutoff_policy policy;
++	int rc;
++
++	cache = vbdev->ocf_cache;
++
++	policy = ocf_get_seqcutoff_policy(policy_name);
++	if (policy == ocf_seq_cutoff_policy_max) {
++		cb(OCF_ERR_INVAL, cb_arg);
++		return;
++	}
++
++	rc = ocf_mngt_cache_trylock(cache);
++	if (rc) {
++		cb(rc, cb_arg);
++		return;
++	}
++
++	rc = ocf_mngt_core_set_seq_cutoff_policy_all(cache, policy);
++	if (rc) {
++		goto end;
++	}
++
++	if (threshold) {
++		threshold = threshold * KiB;
++
++		rc = ocf_mngt_core_set_seq_cutoff_threshold_all(cache, threshold);
++		if (rc) {
++			goto end;
++		}
++	}
++
++	if (promotion_count) {
++		rc = ocf_mngt_core_set_seq_cutoff_promotion_count_all(cache, promotion_count);
++	}
++
++end:
++	ocf_mngt_cache_unlock(cache);
++	cb(rc, cb_arg);
++}
++
+ /* This called if new device is created in SPDK application
+  * If that device named as one of base bdevs of OCF vbdev,
+  * claim and open them */
+diff --git a/module/bdev/ocf/vbdev_ocf.h b/module/bdev/ocf/vbdev_ocf.h
+index b313e9e0c..447f6911c 100644
+--- a/module/bdev/ocf/vbdev_ocf.h
++++ b/module/bdev/ocf/vbdev_ocf.h
+@@ -67,7 +67,7 @@ struct vbdev_ocf_state {
+ 	bool                         doing_clean_delete;
+ 	/* From the moment when finish started */
+ 	bool                         doing_finish;
+-	/* From the moment when reset IO recieved, until it is completed */
++	/* From the moment when reset IO received, until it is completed */
+ 	bool                         doing_reset;
+ 	/* From the moment when exp_bdev is registered */
+ 	bool                         started;
+@@ -203,6 +203,22 @@ int vbdev_ocf_delete(struct vbdev_ocf *vbdev, void (*cb)(void *, int), void *cb_
+ 
+ int vbdev_ocf_delete_clean(struct vbdev_ocf *vbdev, void (*cb)(void *, int), void *cb_arg);
+ 
++/* Set new cache mode on OCF cache */
++void vbdev_ocf_set_cache_mode(
++	struct vbdev_ocf *vbdev,
++	const char *cache_mode_name,
++	void (*cb)(int, struct vbdev_ocf *, void *),
++	void *cb_arg);
++
++/* Set sequential cutoff parameters on OCF cache */
++void vbdev_ocf_set_seqcutoff(
++	struct vbdev_ocf *vbdev,
++	const char *policy_name,
++	uint32_t threshold,
++	uint32_t promotion_count,
++	void (*cb)(int, void *),
++	void *cb_arg);
++
+ typedef void (*vbdev_ocf_foreach_fn)(struct vbdev_ocf *, void *);
+ 
+ /* Execute fn for each OCF device that is online or waits for base devices */
+diff --git a/module/bdev/ocf/vbdev_ocf_rpc.c b/module/bdev/ocf/vbdev_ocf_rpc.c
+index 9e07a200a..c42c07682 100644
+--- a/module/bdev/ocf/vbdev_ocf_rpc.c
++++ b/module/bdev/ocf/vbdev_ocf_rpc.c
+@@ -33,6 +33,7 @@
+ 
+ #include "vbdev_ocf.h"
+ #include "stats.h"
++#include "utils.h"
+ #include "spdk/log.h"
+ #include "spdk/rpc.h"
+ #include "spdk/string.h"
+@@ -103,7 +104,6 @@ rpc_bdev_ocf_create(struct spdk_jsonrpc_request *request,
+ 	free_rpc_bdev_ocf_create(&req);
+ }
+ SPDK_RPC_REGISTER("bdev_ocf_create", rpc_bdev_ocf_create, SPDK_RPC_RUNTIME)
+-SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_ocf_create, construct_ocf_bdev)
+ 
+ /* Structure to hold the parameters for this RPC method. */
+ struct rpc_bdev_ocf_delete {
+@@ -171,7 +171,6 @@ end:
+ 	free_rpc_bdev_ocf_delete(&req);
+ }
+ SPDK_RPC_REGISTER("bdev_ocf_delete", rpc_bdev_ocf_delete, SPDK_RPC_RUNTIME)
+-SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_ocf_delete, delete_ocf_bdev)
+ 
+ /* Structure to hold the parameters for this RPC method. */
+ struct rpc_bdev_ocf_get_stats {
+@@ -266,7 +265,6 @@ end:
+ 	free_rpc_bdev_ocf_get_stats(&req);
+ }
+ SPDK_RPC_REGISTER("bdev_ocf_get_stats", rpc_bdev_ocf_get_stats, SPDK_RPC_RUNTIME)
+-SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_ocf_get_stats, get_ocf_stats)
+ 
+ /* Structure to hold the parameters for this RPC method. */
+ struct rpc_bdev_ocf_get_bdevs {
+@@ -358,4 +356,138 @@ end:
+ 	free_rpc_bdev_ocf_get_bdevs(&req);
+ }
+ SPDK_RPC_REGISTER("bdev_ocf_get_bdevs", rpc_bdev_ocf_get_bdevs, SPDK_RPC_RUNTIME)
+-SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_ocf_get_bdevs, get_ocf_bdevs)
++
++/* Structure to hold the parameters for this RPC method. */
++struct rpc_bdev_ocf_set_cache_mode {
++	char *name;			/* main vbdev name */
++	char *mode;			/* OCF cache mode to switch to */
++};
++
++static void
++free_rpc_bdev_ocf_set_cache_mode(struct rpc_bdev_ocf_set_cache_mode *r)
++{
++	free(r->name);
++	free(r->mode);
++}
++
++/* Structure to decode the input parameters for this RPC method. */
++static const struct spdk_json_object_decoder rpc_bdev_ocf_set_cache_mode_decoders[] = {
++	{"name", offsetof(struct rpc_bdev_ocf_set_cache_mode, name), spdk_json_decode_string},
++	{"mode", offsetof(struct rpc_bdev_ocf_set_cache_mode, mode), spdk_json_decode_string},
++};
++
++static void
++cache_mode_cb(int status, struct vbdev_ocf *vbdev, void *cb_arg)
++{
++	struct spdk_jsonrpc_request *request = cb_arg;
++	struct spdk_json_write_ctx *w;
++
++	if (status) {
++		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
++						     "Could not change OCF vbdev cache mode: %d",
++						     status);
++	} else {
++		w = spdk_jsonrpc_begin_result(request);
++		spdk_json_write_string(w, ocf_get_cache_modename(
++					       ocf_cache_get_mode(vbdev->ocf_cache)));
++		spdk_jsonrpc_end_result(request, w);
++	}
++}
++
++static void
++rpc_bdev_ocf_set_cache_mode(struct spdk_jsonrpc_request *request,
++			    const struct spdk_json_val *params)
++{
++	struct rpc_bdev_ocf_set_cache_mode req = {NULL};
++	struct vbdev_ocf *vbdev;
++	int status;
++
++	status = spdk_json_decode_object(params, rpc_bdev_ocf_set_cache_mode_decoders,
++					 SPDK_COUNTOF(rpc_bdev_ocf_set_cache_mode_decoders),
++					 &req);
++	if (status) {
++		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
++						 "Invalid parameters");
++		goto end;
++	}
++
++	vbdev = vbdev_ocf_get_by_name(req.name);
++	if (vbdev == NULL) {
++		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
++						 spdk_strerror(ENODEV));
++		goto end;
++	}
++
++	vbdev_ocf_set_cache_mode(vbdev, req.mode, cache_mode_cb, request);
++
++end:
++	free_rpc_bdev_ocf_set_cache_mode(&req);
++}
++SPDK_RPC_REGISTER("bdev_ocf_set_cache_mode", rpc_bdev_ocf_set_cache_mode, SPDK_RPC_RUNTIME)
++
++static void
++seqcutoff_cb(int status, void *cb_arg)
++{
++	struct spdk_jsonrpc_request *request = cb_arg;
++
++	if (status) {
++		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
++						     "OCF could not set sequential cutoff parameters: %d", status);
++	} else {
++		spdk_jsonrpc_send_bool_response(request, true);
++	}
++}
++
++/* Structure to hold the parameters for this RPC method. */
++struct rpc_bdev_ocf_set_seqcutoff {
++	char *name;		/* main vbdev name */
++	char *policy;
++	uint32_t threshold;
++	uint32_t promotion_count;
++};
++
++static void
++free_rpc_bdev_ocf_set_seqcutoff(struct rpc_bdev_ocf_set_seqcutoff *r)
++{
++	free(r->name);
++	free(r->policy);
++}
++
++/* Structure to decode the input parameters for this RPC method. */
++static const struct spdk_json_object_decoder rpc_bdev_ocf_set_seqcutoff_decoders[] = {
++	{"name", offsetof(struct rpc_bdev_ocf_set_seqcutoff, name), spdk_json_decode_string},
++	{"policy", offsetof(struct rpc_bdev_ocf_set_seqcutoff, policy), spdk_json_decode_string},
++	{"threshold", offsetof(struct rpc_bdev_ocf_set_seqcutoff, threshold), spdk_json_decode_uint32, true},
++	{"promotion_count", offsetof(struct rpc_bdev_ocf_set_seqcutoff, promotion_count), spdk_json_decode_uint32, true},
++};
++
++static void
++rpc_bdev_ocf_set_seqcutoff(struct spdk_jsonrpc_request *request,
++			   const struct spdk_json_val *params)
++{
++	struct rpc_bdev_ocf_set_seqcutoff req = {NULL};
++	struct vbdev_ocf *vbdev;
++	int ret;
++
++	ret = spdk_json_decode_object(params, rpc_bdev_ocf_set_seqcutoff_decoders,
++				      SPDK_COUNTOF(rpc_bdev_ocf_set_seqcutoff_decoders), &req);
++	if (ret) {
++		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
++						 "Invalid parameters");
++		goto end;
++	}
++
++	vbdev = vbdev_ocf_get_by_name(req.name);
++	if (vbdev == NULL) {
++		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
++						 spdk_strerror(ENODEV));
++		goto end;
++	}
++
++	vbdev_ocf_set_seqcutoff(vbdev, req.policy, req.threshold, req.promotion_count, seqcutoff_cb,
++				request);
++
++end:
++	free_rpc_bdev_ocf_set_seqcutoff(&req);
++}
++SPDK_RPC_REGISTER("bdev_ocf_set_seqcutoff", rpc_bdev_ocf_set_seqcutoff, SPDK_RPC_RUNTIME)
+diff --git a/module/bdev/ocf/volume.c b/module/bdev/ocf/volume.c
+index 648109764..b65a5eb30 100644
+--- a/module/bdev/ocf/volume.c
++++ b/module/bdev/ocf/volume.c
+@@ -88,7 +88,8 @@ vbdev_ocf_volume_io_set_data(struct ocf_io *io, ctx_data_t *data,
+ 	io_ctx->offset = offset;
+ 	io_ctx->data = data;
+ 
+-	if (io_ctx->data && offset >= io_ctx->data->size) {
++	assert(io_ctx->data != NULL);
++	if (io_ctx->data->iovs && offset >= io_ctx->data->size) {
+ 		return -ENOBUFS;
+ 	}
+ 
+@@ -174,7 +175,7 @@ vbdev_ocf_volume_submit_io_cb(struct spdk_bdev_io *bdev_io, bool success, void *
+ 	assert(io_ctx != NULL);
+ 
+ 	if (!success) {
+-		io_ctx->error |= 1;
++		io_ctx->error = io_ctx->error ? : -OCF_ERR_IO;
+ 	}
+ 
+ 	if (io_ctx->iovs_allocated && bdev_io != NULL) {
+@@ -359,10 +360,13 @@ vbdev_ocf_volume_submit_io(struct ocf_io *io)
+ 
+ end:
+ 	if (status) {
+-		/* TODO [ENOMEM]: implement ENOMEM handling when submitting IO to base device */
++		if (status == -ENOMEM) {
++			io_ctx->error = -OCF_ERR_NO_MEM;
++		} else {
++			SPDK_ERRLOG("submission failed with status=%d\n", status);
++		}
+ 
+ 		/* Since callback is not called, we need to do it manually to free io structures */
+-		SPDK_ERRLOG("submission failed with status=%d\n", status);
+ 		vbdev_ocf_volume_submit_io_cb(NULL, false, io);
+ 	}
+ }
+@@ -407,7 +411,7 @@ vbdev_ocf_volume_get_max_io_size(ocf_volume_t volume)
+ }
+ 
+ static struct ocf_volume_properties vbdev_volume_props = {
+-	.name = "SPDK block device",
++	.name = "SPDK_block_device",
+ 	.io_priv_size = sizeof(struct ocf_io_ctx),
+ 	.volume_priv_size = sizeof(struct vbdev_ocf_base *),
+ 	.caps = {
+diff --git a/module/bdev/ocf/volume.h b/module/bdev/ocf/volume.h
+index 6ae7488b5..20b4bff72 100644
+--- a/module/bdev/ocf/volume.h
++++ b/module/bdev/ocf/volume.h
+@@ -36,7 +36,6 @@
+ 
+ #include <ocf/ocf.h>
+ 
+-#include "ocf_env.h"
+ #include "ctx.h"
+ #include "data.h"
+ 
+-- 
+2.33.0
+
+
