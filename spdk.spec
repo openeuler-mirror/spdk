@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 9
+Release: 10
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -40,6 +40,7 @@ Patch28: 0028-configure-add-CONFIG_HAVE_ARC4RANDOM.patch
 Patch29: 0029-Enable-unittest-in-make-check.patch
 Patch30: 0030-nvme_ctrlr_abort_queued_aborts-Segmentation-fault-oc.patch
 Patch31: 0031-Fix-UAF-in-STAILQ_FOREACH.patch
+Patch32: 0032-spdk-upgrade-ocf-lib-and-ocf-bdev-to-latest-SPDK-22.patch
 
 %define package_version %{version}-%{release}
 
@@ -214,6 +215,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Dec 29 2022 shikemeng <shikemeng@huawei.com> - 21.01.1-10
+- Upgrade ocf lib and ocf bdev to SPDK 22.05
+
 * Mon Dec 12 2022 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01.1-9
 - Fix UAF in STAILQ_FOREACH
 
