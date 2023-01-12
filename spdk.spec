@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 10
+Release: 11
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -67,6 +67,7 @@ BuildRequires: CUnit, CUnit-devel
 %if %{with doc}
 BuildRequires: doxygen mscgen graphviz
 %endif
+BuildRequires: ocf-devel
 
 # Install dependencies
 Requires: dpdk >= 21.11, numactl-libs, openssl-libs
@@ -135,7 +136,8 @@ BuildArch: noarch
 	--with-iscsi-initiator \
 	--without-vtune \
 	--enable-raw \
-	--with-nvme-cuse
+	--with-nvme-cuse \
+	--with-ocf=/usr/src/ocf-21.6.3.1
 
 make -j`nproc` all
 
@@ -215,6 +217,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu Jan 12 2023 shikemeng <shikemeng@huawei.com> - 21.01.1-11
+- enable xcache
+
 * Thu Dec 29 2022 shikemeng <shikemeng@huawei.com> - 21.01.1-10
 - Upgrade ocf lib and ocf bdev to SPDK 22.05
 

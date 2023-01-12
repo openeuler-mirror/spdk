@@ -1,0 +1,473 @@
+From 3e50e7afd7463c963b1305a32ef45ebaa01c6f84 Mon Sep 17 00:00:00 2001
+From: Kemeng Shi <shikemeng@huaweicloud.com>
+Date: Sun, 13 Jun 2021 19:53:08 +0800
+Subject: [PATCH] SPDK: enable xcache
+
+1. export get_starting_vec and initialize_cpy_vector in ocf
+2. extend struct vbdev_ocf_cache_ctx with new member "struct vbdev_ocf
+*vbdev"
+3. replace OCF IO interface with Xcache IO interface
+
+Signed-off-by: Kemeng Shi <shikemeng@huaweicloud.com>
+---
+ module/bdev/ocf/ctx.c          |   4 +
+ module/bdev/ocf/ctx.h          |   3 +
+ module/bdev/ocf/vbdev_ocf.c    |  17 +-
+ module/bdev/ocf/vbdev_xcache.c | 291 +++++++++++++++++++++++++++++++++
+ module/bdev/ocf/vbdev_xcache.h |   7 +
+ module/bdev/ocf/volume.c       |  16 +-
+ module/bdev/ocf/volume.h       |   4 +
+ 7 files changed, 334 insertions(+), 8 deletions(-)
+ create mode 100644 module/bdev/ocf/vbdev_xcache.c
+ create mode 100644 module/bdev/ocf/vbdev_xcache.h
+
+diff --git a/module/bdev/ocf/ctx.c b/module/bdev/ocf/ctx.c
+index 8666617..9a8ea04 100644
+--- a/module/bdev/ocf/ctx.c
++++ b/module/bdev/ocf/ctx.c
+@@ -340,7 +340,11 @@ cleaner_poll(void *arg)
+ 	}
+ 
+ 	if (spdk_get_ticks() >= priv->next_run) {
++#ifdef SPDK_CONFIG_APP_RW
++		xcache_cleaner_run(cleaner, priv->queue);
++#else
+ 		ocf_cleaner_run(cleaner, priv->queue);
++#endif
+ 		return SPDK_POLLER_BUSY;
+ 	}
+ 
+diff --git a/module/bdev/ocf/ctx.h b/module/bdev/ocf/ctx.h
+index 4419ef5..a96c10a 100644
+--- a/module/bdev/ocf/ctx.h
++++ b/module/bdev/ocf/ctx.h
+@@ -50,6 +50,9 @@ struct vbdev_ocf_cache_ctx {
+ 	ocf_queue_t                  cleaner_queue;
+ 	pthread_mutex_t              lock;
+ 	env_atomic                   refcnt;
++#ifdef SPDK_CONFIG_APP_RW
++	struct vbdev_ocf             *vbdev;
++#endif
+ };
+ 
+ void vbdev_ocf_cache_ctx_put(struct vbdev_ocf_cache_ctx *ctx);
+diff --git a/module/bdev/ocf/vbdev_ocf.c b/module/bdev/ocf/vbdev_ocf.c
+index 41f1f73..b4f45cb 100644
+--- a/module/bdev/ocf/vbdev_ocf.c
++++ b/module/bdev/ocf/vbdev_ocf.c
+@@ -47,6 +47,10 @@
+ #include "spdk/log.h"
+ #include "spdk/cpuset.h"
+ 
++#ifdef SPDK_CONFIG_APP_RW
++#include "vbdev_xcache.h"
++#endif
++
+ static struct spdk_bdev_module ocf_if;
+ 
+ static TAILQ_HEAD(, vbdev_ocf) g_ocf_vbdev_head
+@@ -780,7 +784,11 @@ vbdev_ocf_write_json_config(struct spdk_bdev *bdev, struct spdk_json_write_ctx *
+ static struct spdk_bdev_fn_table cache_dev_fn_table = {
+ 	.destruct = vbdev_ocf_destruct,
+ 	.io_type_supported = vbdev_ocf_io_type_supported,
+-	.submit_request	= vbdev_ocf_submit_request,
++#ifdef SPDK_CONFIG_APP_RW
++	.submit_request	= xcache_submit_request,
++#else
++	.submit_request = vbdev_ocf_submit_request,
++#endif
+ 	.get_io_channel	= vbdev_ocf_get_io_channel,
+ 	.write_config_json = vbdev_ocf_write_json_config,
+ 	.dump_info_json = vbdev_ocf_dump_info_json,
+@@ -1121,6 +1129,9 @@ start_cache(struct vbdev_ocf *vbdev)
+ 		vbdev_ocf_mngt_exit(vbdev, unregister_path_dirty, rc);
+ 		return;
+ 	}
++#ifdef SPDK_CONFIG_APP_RW
++	vbdev->cache_ctx->vbdev = vbdev;
++#endif
+ 
+ 	if (vbdev->cfg.loadq) {
+ 		ocf_mngt_cache_load(vbdev->ocf_cache, &vbdev->cfg.device, start_cache_cmpl, vbdev);
+@@ -1847,7 +1858,11 @@ static struct spdk_bdev_module ocf_if = {
+ 	.module_init = vbdev_ocf_init,
+ 	.fini_start = fini_start,
+ 	.module_fini = vbdev_ocf_module_fini,
++#ifdef SPDK_CONFIG_APP_RW
++	.get_ctx_size = xcache_get_ctx_size,
++#else
+ 	.get_ctx_size = vbdev_ocf_get_ctx_size,
++#endif
+ 	.examine_config = vbdev_ocf_examine,
+ 	.examine_disk   = vbdev_ocf_examine_disk,
+ };
+diff --git a/module/bdev/ocf/vbdev_xcache.c b/module/bdev/ocf/vbdev_xcache.c
+new file mode 100644
+index 0000000..819ef4b
+--- /dev/null
++++ b/module/bdev/ocf/vbdev_xcache.c
+@@ -0,0 +1,291 @@
++#include <ocf/ocf.h>
++
++#include "spdk/bdev_module.h"
++#include "spdk/thread.h"
++#include "spdk/log.h"
++
++#include "vbdev_ocf.h"
++#include "data.h"
++#include "ctx.h"
++#include "volume.h"
++
++#include "vbdev_xcache.h"
++
++static inline struct spdk_bdev_io *spdk_io_to_bdev_io(struct xcache_io *io)
++{
++	struct spdk_bdev_io *bdev_io = container_of((void *)io - sizeof(struct bdev_ocf_data), struct spdk_bdev_io, driver_ctx);
++	return bdev_io;
++}
++
++static void
++xcache_submit_io_cb(struct xcache_io *io, int error)
++{
++
++	struct spdk_bdev_io *bdev_io = spdk_io_to_bdev_io(io);
++
++	if (error == 0) {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
++	} else if (error == -ENOMEM) {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_NOMEM);
++	} else {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
++	}
++}
++
++static int
++submit_io_to_xcache(struct spdk_bdev_io *bdev_io, struct xcache_io *io)
++{
++	switch (bdev_io->type) {
++	case SPDK_BDEV_IO_TYPE_WRITE:
++	case SPDK_BDEV_IO_TYPE_READ:
++	case SPDK_BDEV_IO_TYPE_FLUSH:
++		xcache_submit_io(io);
++		return 0;
++	default:
++		SPDK_ERRLOG("Unsupported IO type: %d\n", bdev_io->type);
++		return -EINVAL;
++	}
++}
++
++static void
++xcache_io_handle(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io, int dir)
++{
++	struct vbdev_ocf_qctx *qctx = spdk_io_channel_get_ctx(ch);
++	struct vbdev_ocf *vbdev = bdev_io->bdev->ctxt;
++
++	struct bdev_ocf_data *data;
++	struct xcache_io *io;
++	int err;
++
++	data = vbdev_ocf_data_from_spdk_io(bdev_io);
++	io = (struct xcache_io *)(data + 1);
++	io->data = data;
++	io->io_queue = qctx->queue;
++	io->end = xcache_submit_io_cb;
++	io->error = 0;
++	io->rw = dir;
++	io->size = bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen;
++	io->start_addr = bdev_io->u.bdev.offset_blocks * bdev_io->bdev->blocklen;
++	io->core = vbdev->ocf_core;
++	io->cache = vbdev->ocf_cache;
++	io->flags = 0;
++
++	err = submit_io_to_xcache(bdev_io, io);
++	if (err) {
++		goto fail;
++	}
++
++	return;
++
++fail:
++	if (err == -ENOMEM) {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_NOMEM);
++	} else {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
++	}
++}
++
++static void
++xcache_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io,
++		     bool success)
++{
++	if (!success) {
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
++		return;
++	}
++
++	xcache_io_handle(ch, bdev_io, OCF_READ);
++}
++
++/* Called from bdev layer when an io to Cache vbdev is submitted */
++void
++xcache_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io)
++{
++	switch (bdev_io->type) {
++	case SPDK_BDEV_IO_TYPE_READ:
++		/* User does not have to allocate io vectors for the request,
++		 * so in case they are not allocated, we allocate them here */
++		spdk_bdev_io_get_buf(bdev_io, xcache_get_buf_cb,
++				     bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen);
++		break;
++	case SPDK_BDEV_IO_TYPE_WRITE:
++		xcache_io_handle(ch, bdev_io, OCF_WRITE);
++		break;
++	case SPDK_BDEV_IO_TYPE_FLUSH:
++		xcache_io_handle(ch, bdev_io, OCF_FLUSH);
++		break;
++	default:
++		SPDK_ERRLOG("Unknown I/O type %d\n", bdev_io->type);
++		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
++		break;
++	}
++}
++
++int
++xcache_get_ctx_size(void)
++{
++	return sizeof(struct xcache_io) + sizeof(struct bdev_ocf_data);
++}
++
++static void
++backdev_io_end(bool success, struct xcache_backdev_io *io_base,
++		uint64_t addr, uint64_t size)
++{
++	struct backdev_io_end_arg cb_arg;
++
++	if (io_base->priv != NULL) {
++		env_free(io_base->priv);
++		io_base->priv = NULL;
++	}
++
++	cb_arg.error = !success;
++	cb_arg.addr = addr;
++	cb_arg.size = size;
++	xcache_backdev_io_end(io_base, &cb_arg);
++}
++
++static void
++backdev_io_cb(struct spdk_bdev_io *bdev_io, bool success, void *opaque)
++{
++	uint64_t addr = bdev_io->u.bdev.offset_blocks * bdev_io->bdev->blocklen;
++	uint64_t size = bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen;
++
++	backdev_io_end(success, (struct xcache_backdev_io *)opaque, addr, size);
++
++	spdk_bdev_free_io(bdev_io);
++}
++
++static int xcache_prepare_submit(struct xcache_backdev_io *io_base, bool to_cache,
++		struct vbdev_ocf_base **base, struct spdk_io_channel **ch)
++{
++	struct xcache_io *io = io_base->xcache_io;
++	ocf_queue_t q = io->io_queue;
++	ocf_cache_t cache = ocf_queue_get_cache(q);
++	struct vbdev_ocf_cache_ctx *cctx = ocf_cache_get_priv(cache);
++	struct vbdev_ocf *vbdev;
++	struct vbdev_ocf_qctx *qctx;
++
++	if (cctx == NULL) {
++		return -EFAULT;
++	}
++
++	vbdev = cctx->vbdev;
++	// get vbdev_ocf_base
++	if (to_cache) {
++		*base = &vbdev->cache;
++	} else {
++		*base = &vbdev->core;
++	}
++
++	if (q == cctx->cleaner_queue || q == cctx->mngt_queue) {
++		*ch = (*base)->management_channel;
++		return 0;
++	}
++
++	qctx = ocf_queue_get_priv(q);
++	if (qctx == NULL) {
++		return -EFAULT;
++	}
++	if (to_cache) {
++		*ch = qctx->cache_ch;
++	} else {
++		*ch = qctx->core_ch;
++	}
++
++	return 0;
++}
++
++struct copy_vector {
++	int iovcnt;
++	struct iovec iovs[];
++};
++
++void spdk_backdev_submit_io(struct xcache_backdev_io *io_base, bool to_cache, uint64_t addr, uint64_t len, uint64_t offset, uint8_t dir)
++{
++	struct bdev_ocf_data *data = (struct bdev_ocf_data *)io_base->data;
++
++	uint64_t size, bytes;
++	struct iovec *iovs;
++	int iovcnt;
++	int status = 0;
++	struct vbdev_ocf_base *base;
++	struct spdk_io_channel *ch;
++	int i, j;
++	struct copy_vector *vector;
++
++	io_base->priv = NULL;
++
++	if (xcache_prepare_submit(io_base, to_cache, &base, &ch) != 0) {
++		backdev_io_end(false, io_base, addr, len);
++		return;
++	}
++
++	if (dir == OCF_FLUSH) {
++		status = spdk_bdev_flush(base->desc, ch, addr, len, backdev_io_cb, io_base);
++		goto end;
++	}
++
++	size = data->size;
++	iovs = data->iovs;
++	iovcnt = data->iovcnt;
++	if (len < size) {
++		if (iovcnt == 1) {
++			if (dir == OCF_READ) {
++				status = spdk_bdev_read(base->desc, ch,
++							iovs[0].iov_base + offset, addr, len,
++							backdev_io_cb, io_base);
++			} else if (dir == OCF_WRITE) {
++				status = spdk_bdev_write(base->desc, ch,
++							 iovs[0].iov_base + offset, addr, len,
++							 backdev_io_cb, io_base);
++			}
++			goto end;
++		} else {
++			i = get_starting_vec(iovs, iovcnt, &offset);
++
++			if (i < 0) {
++				SPDK_ERRLOG("offset bigger than data size\n");
++				backdev_io_end(false, io_base, addr, len);
++				return;
++			}
++
++			bytes = len + offset;
++			j = get_starting_vec(iovs + i, iovcnt - i, &bytes);
++			if (offset == 0 && bytes == 0) {
++				iovs = iovs + i;
++				iovcnt = j;
++			} else {
++				if (bytes != 0) {
++					j++;
++				}
++				vector = env_malloc(sizeof(int) + sizeof(*iovs) * j, ENV_MEM_NOIO);
++				if (vector == NULL) {
++					SPDK_ERRLOG("allocation failed\n");
++					backdev_io_end(false, io_base, addr, len);
++					return;
++				}
++				vector->iovcnt = j;
++				io_base->priv = vector;
++
++				initialize_cpy_vector(vector->iovs, &iovs[i], offset, len);
++
++				iovs = vector->iovs;
++				iovcnt = vector->iovcnt;
++			}
++		}
++	}
++
++	if (dir == OCF_READ) {
++		status = spdk_bdev_readv(base->desc, ch,
++					 iovs, iovcnt, addr, len, backdev_io_cb, io_base);
++	} else if (dir == OCF_WRITE) {
++		status = spdk_bdev_writev(base->desc, ch,
++					  iovs, iovcnt, addr, len, backdev_io_cb, io_base);
++	}
++
++end:
++	if (status) {
++		SPDK_ERRLOG("submission failed with status=%d\n", status);
++		backdev_io_end(false, io_base, addr, len);
++	}
++}
+diff --git a/module/bdev/ocf/vbdev_xcache.h b/module/bdev/ocf/vbdev_xcache.h
+new file mode 100644
+index 0000000..8e386f3
+--- /dev/null
++++ b/module/bdev/ocf/vbdev_xcache.h
+@@ -0,0 +1,7 @@
++#ifndef VBDEV_XCACHE_H
++#define VBDEV_XCACHE_H
++
++void xcache_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io);
++int xcache_get_ctx_size(void);
++
++#endif
+diff --git a/module/bdev/ocf/volume.c b/module/bdev/ocf/volume.c
+index b65a5eb..96112ff 100644
+--- a/module/bdev/ocf/volume.c
++++ b/module/bdev/ocf/volume.c
+@@ -120,7 +120,7 @@ vbdev_ocf_volume_io_put(struct ocf_io *io)
+ 	}
+ }
+ 
+-static int
++int
+ get_starting_vec(struct iovec *iovs, int iovcnt, int *offset)
+ {
+ 	int i;
+@@ -136,13 +136,16 @@ get_starting_vec(struct iovec *iovs, int iovcnt, int *offset)
+ 		off -= iovs[i].iov_len;
+ 	}
+ 
++	if (off == 0) {
++		*offset = 0;
++		return i;
++	}
++
+ 	return -1;
+ }
+ 
+-static void
+-initialize_cpy_vector(struct iovec *cpy_vec, int cpy_vec_len, struct iovec *orig_vec,
+-		      int orig_vec_len,
+-		      size_t offset, size_t bytes)
++void
++initialize_cpy_vector(struct iovec *cpy_vec, struct iovec *orig_vec, size_t offset, size_t bytes)
+ {
+ 	void *curr_base;
+ 	int len, i;
+@@ -342,8 +345,7 @@ vbdev_ocf_volume_submit_io(struct ocf_io *io)
+ 				return;
+ 			}
+ 
+-			initialize_cpy_vector(iovs, io_ctx->data->iovcnt, &io_ctx->data->iovs[i],
+-					      iovcnt, offset, len);
++			initialize_cpy_vector(iovs, &io_ctx->data->iovs[i], offset, len);
+ 		}
+ 	} else {
+ 		iovs = io_ctx->data->iovs;
+diff --git a/module/bdev/ocf/volume.h b/module/bdev/ocf/volume.h
+index 20b4bff..b053e02 100644
+--- a/module/bdev/ocf/volume.h
++++ b/module/bdev/ocf/volume.h
+@@ -59,4 +59,8 @@ static inline struct ocf_io_ctx *ocf_get_io_ctx(struct ocf_io *io)
+ 	return ocf_io_get_priv(io);
+ }
+ 
++int get_starting_vec(struct iovec *iovs, int iovcnt, int *offset);
++void initialize_cpy_vector(struct iovec *cpy_vec, struct iovec *orig_vec,
++			   size_t offset, size_t bytes);
++
+ #endif
+-- 
+2.33.0
+
