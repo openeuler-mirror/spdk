@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01
-Release: 5
+Release: 6
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -143,6 +143,11 @@ make -C doc
 
 %install
 %make_install -j`nproc` prefix=%{_usr} libdir=%{_libdir} datadir=%{_datadir}
+install -d $RPM_BUILD_ROOT/opt/spdk/scripts
+install -d $RPM_BUILD_ROOT/opt/spdk/include/spdk
+install -m 0744 ./scripts/setup.sh $RPM_BUILD_ROOT/opt/spdk/scripts/setup.sh
+install -m 0744 ./scripts/common.sh $RPM_BUILD_ROOT/opt/spdk/scripts/common.sh
+install -m 0644 ./include/spdk/pci_ids.h $RPM_BUILD_ROOT/opt/spdk/include/spdk/pci_ids.h
 
 # Install tools
 mkdir -p %{install_datadir}
@@ -177,6 +182,13 @@ mv doc/output/html/ %{install_docdir}
 %files
 %{_bindir}/spdk_*
 %{_libdir}/*.so.*
+%dir /opt/spdk
+%dir /opt/spdk/scripts
+%dir /opt/spdk/include
+%dir /opt/spdk/include/spdk
+/opt/spdk/scripts/setup.sh
+/opt/spdk/scripts/common.sh
+/opt/spdk/include/spdk/pci_ids.h
 
 
 %files devel
@@ -197,6 +209,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Fri Feb 03 2023 Hongtao Zhang <zhanghongtao22@huawei.com> - 21.01-6
+- Add setup.sh scripts during installation
+
 * Sat Jul 24 2021 Zhiqiang Liu <liuzhiqiang26@huawei.com> - 21.01-5
 - backport 13 bugfix from upstream
 
