@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 12
+Release: 13
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -42,6 +42,12 @@ Patch30: 0030-nvme_ctrlr_abort_queued_aborts-Segmentation-fault-oc.patch
 Patch31: 0031-Fix-UAF-in-STAILQ_FOREACH.patch
 Patch32: 0032-spdk-upgrade-ocf-lib-and-ocf-bdev-to-latest-SPDK-22.patch
 Patch33: 0033-SPDK-enable-xcache.patch
+Patch34: 0034-test-nvmf-Fix-trap.patch
+Patch35: 0035-scripts-nvmf_perf-fix-pylint-C0411-wrong-import-orde.patch
+Patch36: 0036-scripts-nvmf_perf-fix-pylint-E1111-error-assignment-.patch
+Patch37: 0037-scripts-nvmf_perf-check-extra_params-key-berofe-acce.patch
+Patch38: 0038-nvme-rdma-Only-wait-for-the-RDMA-event-if-spdk_rdma_.patch
+Patch39: 0039-Cleanup-Fix-boolean-arg-in-fio-plugin.patch
 
 %define package_version %{version}-%{release}
 
@@ -218,6 +224,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Wed Mar 15 2023 tongkunkun <tongkunkun_yewu@cmss.chinamobile.com>- 21.01.1-13
+- backport upstream patches
+
 * Thu Jan 19 2023 shikemeng <shikemeng@huawei.com> - 21.01.1-12
 - Fix compile error that "undefined reference to spdk_backdev_submit_io"
 
