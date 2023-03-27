@@ -1,0 +1,35 @@
+From b76cb37ce4bfd53eb48ae299cf0067b4647f8a21 Mon Sep 17 00:00:00 2001
+From: Michal Berger <michal.berger@intel.com>
+Date: Mon, 31 Oct 2022 09:25:11 +0100
+Subject: [PATCH] test/nvmf: Fix trap
+
+Also, add at_app_exit() to make sure that all vhost and qemu
+instances are terminated as well.
+
+Signed-off-by: Michal Berger <michal.berger@intel.com>
+Change-Id: I917f1cb1b02d18b78a482d754a19f509e580fc98
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/15185
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Pawel Piatek <pawelx.piatek@intel.com>
+Reviewed-by: Konrad Sztyber <konrad.sztyber@intel.com>
+---
+ test/nvmf/target/nvmf_vhost.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/nvmf/target/nvmf_vhost.sh b/test/nvmf/target/nvmf_vhost.sh
+index 9c9dde35d..c00a66b18 100755
+--- a/test/nvmf/target/nvmf_vhost.sh
++++ b/test/nvmf/target/nvmf_vhost.sh
+@@ -35,7 +35,7 @@ mkdir -p "$(get_vhost_dir 3)"
+ vhostpid=$!
+ waitforlisten $vhostpid $NVMF_SOCK
+ 
+-trap 'process_shm --id $NVMF_APP_SHM_ID; killprocess $vhostpid nvmftestfini; exit 1' SIGINT SIGTERM EXIT
++trap 'process_shm --id $NVMF_APP_SHM_ID; nvmftestfini; at_app_exit; exit 1' SIGINT SIGTERM EXIT
+ 
+ # Configure NVMF tgt on host machine
+ malloc_bdev="$($NVMF_RPC bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE)"
+-- 
+2.37.2.windows.2
+

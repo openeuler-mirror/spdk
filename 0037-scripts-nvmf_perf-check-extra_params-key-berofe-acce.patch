@@ -1,0 +1,37 @@
+From 4dd1548be3a04d4ae072c4edcfc0a349036f4df2 Mon Sep 17 00:00:00 2001
+From: Karol Latecki <karol.latecki@intel.com>
+Date: Thu, 28 Jan 2021 16:30:49 +0100
+Subject: [PATCH] scripts/nvmf_perf: check "extra_params" key berofe accessing
+ it
+
+If config without this field was used then
+script resulted in KeyError exception.
+
+Signed-off-by: Karol Latecki <karol.latecki@intel.com>
+Change-Id: Icf0b270d28dcc6bf44b66c4b9ed583a6b3ef08b6
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6204
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+Reviewed-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: Maciej Wawryk <maciejx.wawryk@intel.com>
+---
+ scripts/perf/nvmf/run_nvmf.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/perf/nvmf/run_nvmf.py b/scripts/perf/nvmf/run_nvmf.py
+index 63179923a..7885ff2f0 100755
+--- a/scripts/perf/nvmf/run_nvmf.py
++++ b/scripts/perf/nvmf/run_nvmf.py
+@@ -772,7 +772,7 @@ class KernelInitiator(Initiator):
+                                               cpu_frequency=cpu_frequency, fio_bin=fio_bin)
+ 
+         self.extra_params = ""
+-        if kwargs["extra_params"]:
++        if "extra_params" in kwargs.keys():
+             self.extra_params = kwargs["extra_params"]
+ 
+     def __del__(self):
+-- 
+2.37.2.windows.2
+

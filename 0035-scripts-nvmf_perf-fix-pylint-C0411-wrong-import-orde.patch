@@ -1,0 +1,51 @@
+From 6882e04563c8b406c2751ad258b5dd87786937aa Mon Sep 17 00:00:00 2001
+From: Karol Latecki <karol.latecki@intel.com>
+Date: Thu, 28 Jan 2021 14:04:03 +0100
+Subject: [PATCH] scripts/nvmf_perf: fix pylint C0411 wrong import order
+
+Standard lib modules first, then pip installed modules
+and local modules last.
+
+Signed-off-by: Karol Latecki <karol.latecki@intel.com>
+Change-Id: If0159fad29bab5bef0b69aa803e3cea429cc5f25
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6202
+Reviewed-by: Maciej Wawryk <maciejx.wawryk@intel.com>
+Reviewed-by: Tomasz Zawadzki <tomasz.zawadzki@intel.com>
+Reviewed-by: Pawel Piatek <pawelx.piatek@intel.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Community-CI: Mellanox Build Bot
+---
+ scripts/perf/nvmf/run_nvmf.py | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/scripts/perf/nvmf/run_nvmf.py b/scripts/perf/nvmf/run_nvmf.py
+index 2883d9a99..2c5331e86 100755
+--- a/scripts/perf/nvmf/run_nvmf.py
++++ b/scripts/perf/nvmf/run_nvmf.py
+@@ -4,17 +4,19 @@ import os
+ import re
+ import sys
+ import json
+-import paramiko
+ import zipfile
+ import threading
+ import subprocess
+ import itertools
+ import time
+ import uuid
++from collections import OrderedDict
++
++import paramiko
++import pandas as pd
++
+ import rpc
+ import rpc.client
+-import pandas as pd
+-from collections import OrderedDict
+ from common import *
+ 
+ 
+-- 
+2.37.2.windows.2
+

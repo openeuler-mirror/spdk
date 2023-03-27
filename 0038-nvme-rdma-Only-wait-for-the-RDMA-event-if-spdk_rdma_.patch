@@ -1,0 +1,46 @@
+From 74b2916c4a7d90a882b671c925f0e86dc0cb6338 Mon Sep 17 00:00:00 2001
+From: Ziye Yang <ziye.yang@intel.com>
+Date: Sat, 30 Jan 2021 01:25:32 +0800
+Subject: [PATCH] nvme/rdma: Only wait for the RDMA event if
+ spdk_rdma_qp_disconnect return 0
+
+If rdma_qp_disconnect is not correctly sent out, we will not wait
+for the event.
+
+Change-Id: I99701e421dc93909d481ccf35e9bfd8004e60da8
+Signed-off-by: Ziye Yang <ziye.yang@intel.com>
+Reviewed-on: https://review.spdk.io/gerrit/c/spdk/spdk/+/6163
+Tested-by: SPDK CI Jenkins <sys_sgci@intel.com>
+Reviewed-by: Aleksey Marchuk <alexeymar@mellanox.com>
+Reviewed-by: Jim Harris <james.r.harris@intel.com>
+Reviewed-by: <dongx.yi@intel.com>
+---
+ lib/nvme/nvme_rdma.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/lib/nvme/nvme_rdma.c b/lib/nvme/nvme_rdma.c
+index 1046f3d91..47023c083 100644
+--- a/lib/nvme/nvme_rdma.c
++++ b/lib/nvme/nvme_rdma.c
+@@ -1646,6 +1646,7 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
+ 	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(qpair);
+ 	struct nvme_rdma_ctrlr *rctrlr = NULL;
+ 	struct nvme_rdma_cm_event_entry *entry, *tmp;
++	int rc;
+ 
+ 	spdk_rdma_free_mem_map(&rqpair->mr_map);
+ 	nvme_rdma_unregister_reqs(rqpair);
+@@ -1673,8 +1674,8 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
+ 
+ 	if (rqpair->cm_id) {
+ 		if (rqpair->rdma_qp) {
+-			spdk_rdma_qp_disconnect(rqpair->rdma_qp);
+-			if (rctrlr != NULL) {
++			rc = spdk_rdma_qp_disconnect(rqpair->rdma_qp);
++			if ((rctrlr != NULL) && (rc == 0)) {
+ 				if (nvme_rdma_process_event(rqpair, rctrlr->cm_channel, RDMA_CM_EVENT_DISCONNECTED)) {
+ 					SPDK_DEBUGLOG(nvme, "Target did not respond to qpair disconnect.\n");
+ 				}
+-- 
+2.37.2.windows.2
+
