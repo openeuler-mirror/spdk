@@ -4,7 +4,7 @@
 
 Name: spdk
 Version: 21.01.1
-Release: 12
+Release: 13
 Summary: Set of libraries and utilities for high performance user-mode storage
 License: BSD and MIT
 URL: http://spdk.io
@@ -123,6 +123,10 @@ BuildArch: noarch
 %autosetup -n spdk-%{version} -p1
 
 %build
+%if "%toolchain" == "clang"
+	export CFLAGS="$CFLAGS -Wno-error=unknown-warning-option -Wno-error=unused-but-set-variable -Wno-error=unused-function -Wno-error=deprecated-declarations -Wno-error=incompatible-pointer-types -Wno-error=string-concatenation -Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-command-line-argument"
+	export CXXFLAGS="$CXXFLAGS -Wno-error=unknown-warning-option -Wno-error=unused-but-set-variable -Wno-error=unused-function -Wno-error=deprecated-declarations -Wno-error=incompatible-pointer-types -Wno-error=string-concatenation -Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-command-line-argument"
+%endif
 ./configure --prefix=%{_usr} \
 	--disable-tests \
 	--without-crypto \
@@ -218,6 +222,9 @@ mv doc/output/html/ %{install_docdir}
 
 
 %changelog
+* Thu May 18 2023 yoo <sunyuechi@iscas.ac.cn> - 21.01.1-13
+- fix clang build error
+
 * Thu Jan 19 2023 shikemeng <shikemeng@huawei.com> - 21.01.1-12
 - Fix compile error that "undefined reference to spdk_backdev_submit_io"
 
