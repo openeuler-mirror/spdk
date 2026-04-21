@@ -78,6 +78,12 @@ spdk_app_get_shm_id(void)
 	return g_spdk_app.shm_id;
 }
 
+bool
+spdk_get_shutdown_sig_received(void)
+{
+	return g_shutdown_sig_received;
+}
+
 /* append one empty option to indicate the end of the array */
 static const struct option g_cmdline_options[] = {
 #define CONFIG_FILE_OPT_IDX	'c'
@@ -150,6 +156,8 @@ static const struct option g_cmdline_options[] = {
 	{"no-rpc-server",		no_argument,		NULL, NO_RPC_SERVER_OPT_IDX},
 #define ENFORCE_NUMA_OPT_IDX 274
 	{"enforce-numa",		no_argument,		NULL, ENFORCE_NUMA_OPT_IDX},
+#define HOT_RESTART_OPT_IDX 275
+	{"hot-restart",		no_argument,	NULL, HOT_RESTART_OPT_IDX},
 };
 
 static int
@@ -429,7 +437,7 @@ app_do_spdk_subsystem_init(int rc, void *arg1)
 		opts.log_file = g_spdk_app.rpc_log_file;
 		opts.log_level = g_spdk_app.rpc_log_level;
 
-		rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, &opts);
+		rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, &opts, RPC_SELECT_INTERVAL);
 		if (rc) {
 			spdk_app_stop(rc);
 			return;
@@ -504,6 +512,7 @@ app_setup_env(struct spdk_app_opts *opts)
 	env_opts.vf_token = opts->vf_token;
 	env_opts.no_huge = opts->no_huge;
 	env_opts.enforce_numa = opts->enforce_numa;
+	env_opts.vf_token = opts->vf_token;
 
 	rc = spdk_env_init(&env_opts);
 	free(env_opts.pci_blocked);
@@ -689,6 +698,7 @@ app_copy_opts(struct spdk_app_opts *opts, struct spdk_app_opts *opts_user, size_
 	SET_FIELD(json_data);
 	SET_FIELD(json_data_size);
 	SET_FIELD(disable_cpumask_locks);
+	SET_FIELD(hot_restart);
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
@@ -1146,6 +1156,7 @@ usage(void (*app_usage)(void))
 	printf(" -v, --version             print SPDK version\n");
 	printf(" -d, --limit-coredump      do not set max coredump size to RLIM_INFINITY\n");
 	printf("     --env-context         Opaque context for use of the env implementation\n");
+	printf("     --hot-restart         enable hot restart\n");
 
 	if (app_usage) {
 		printf("\nApplication specific:\n");
@@ -1444,6 +1455,9 @@ spdk_app_parse_args(int argc, char **argv, struct spdk_app_opts *opts,
 			printf(SPDK_VERSION_STRING"\n");
 			retval = SPDK_APP_PARSE_ARGS_HELP;
 			goto out;
+		case HOT_RESTART_OPT_IDX:
+			opts->hot_restart = true;
+			break;
 		case '?':
 			/*
 			 * In the event getopt() above detects an option

@@ -11,8 +11,6 @@
 #include "spdk/log.h"
 #include "spdk/rpc.h"
 
-#define RPC_SELECT_INTERVAL	4000 /* 4ms */
-
 static struct spdk_poller *g_rpc_poller = NULL;
 
 struct init_rpc_server {
@@ -127,7 +125,7 @@ get_server_by_addr(const char *listen_addr)
 }
 
 int
-spdk_rpc_initialize(const char *listen_addr, const struct spdk_rpc_opts *opts)
+spdk_rpc_initialize(const char *listen_addr, const struct spdk_rpc_opts *opts, int internval)
 {
 	struct init_rpc_server *init_server;
 	int rc;
@@ -174,7 +172,7 @@ spdk_rpc_initialize(const char *listen_addr, const struct spdk_rpc_opts *opts)
 	STAILQ_INSERT_TAIL(&g_init_rpc_servers, init_server, link);
 	if (g_rpc_poller == NULL) {
 		/* Register a poller to periodically check for RPCs */
-		g_rpc_poller = SPDK_POLLER_REGISTER(rpc_subsystem_poll_servers, NULL, RPC_SELECT_INTERVAL);
+		g_rpc_poller = SPDK_POLLER_REGISTER(rpc_subsystem_poll_servers, NULL, internval);
 	}
 
 	return 0;

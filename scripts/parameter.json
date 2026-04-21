@@ -1,0 +1,5 @@
+{
+    "mempool_size_mb": 1024,
+    "queues": 16,
+    "mode": "default"
+}

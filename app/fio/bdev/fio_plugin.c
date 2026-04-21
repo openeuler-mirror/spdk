@@ -297,7 +297,7 @@ spdk_fio_bdev_startup_done(int rc, void *cb_arg)
 	}
 
 	if (g_rpc_listen_addr != NULL) {
-		if (spdk_rpc_initialize(g_rpc_listen_addr, NULL) != 0) {
+		if (spdk_rpc_initialize(g_rpc_listen_addr, NULL, RPC_SELECT_INTERVAL) != 0) {
 			SPDK_ERRLOG("could not initialize RPC address %s\n", g_rpc_listen_addr);
 			exit(1);
 		}

@@ -16,6 +16,8 @@
 	spdk_rpc_server_pause;
 	spdk_rpc_server_resume;
 	spdk_subsystem_load_config;
+	spdk_ssam_get_hot_restart;
+	spdk_ssam_set_hot_restart;
 
 	local: *;
 };

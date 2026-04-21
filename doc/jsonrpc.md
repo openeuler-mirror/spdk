@@ -505,7 +505,25 @@ Example response:
     "bdev_lvol_set_parent_bdev",
     "bdev_daos_delete",
     "bdev_daos_create",
-    "bdev_daos_resize"
+    "bdev_daos_resize",
+    "create_blk_controller",
+    "delete_controller",
+    "delete_scsi_controller",
+    "get_controllers",
+    "get_scsi_controllers",
+    "controller_get_iostat",
+    "blk_device_iostat",
+    "controller_clear_iostat",
+    "bdev_resize",
+    "scsi_bdev_resize",
+    "bdev_aio_resize",
+    "os_ready",
+    "os_not_ready",
+    "create_scsi_controller",
+    "scsi_controller_add_target",
+    "scsi_controller_remove_target",
+    "scsi_device_iostat",
+    "device_pcie_list"
   ]
 }
 ~~~
@@ -13866,5 +13884,847 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": true
+}
+~~~
+
+### log_command_info {#rpc_ssam_log_command_info}
+
+Record operation logs
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+event                   | Required | string      | Function id of PCI device
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "event": "create_blk_controller"
+  },
+  "jsonrpc": "2.0",
+  "method": "log_command_info",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### create_blk_controller {#rpc_ssam_create_blk_controller}
+
+Create ssam blk controller
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+dev_name                | Required | string      | Device name to add to controller
+index                   | Required | string      | Function id or dbdf of PCI device
+readonly                | Optional | bool        | Set controller as read-only
+serial                  | Optional | string      | Set volume id
+vqueue                  | Optional | number      | Set virtio queue num
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "dev_name": "aio0",
+    "index": "16",
+    "readonly": true,
+    "serial": "blk_disk",
+    "vqueue": 16
+  },
+  "jsonrpc": "2.0",
+  "method": "create_blk_controller",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### delete_controller {#rpc_ssam_delete_controller}
+
+Delete ssam controller from configuration
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+index                   | Required | string      | Function id or dbdf of PCI device
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "index": "16"
+  },
+  "jsonrpc": "2.0",
+  "method": "delete_controller",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### delete_scsi_controller {#rpc_ssam_delete_scsi_controller}
+
+Delete ssam scsi controller from configuration
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Scsi controller name to be delete
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0"
+  },
+  "jsonrpc": "2.0",
+  "method": "delete_scsi_controller",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### get_controllers {#rpc_ssam_get_controllers}
+
+Get information about configured ssam controllers
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+function_id             | Optional | number      | Function id of PCI device
+dbdf                    | Optional | string      | Dbdf of PCI device
+
+#### Result
+
+List of ssam controllers.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "function_id": null,
+    "dbdf": null
+  },
+  "jsonrpc": "2.0",
+  "method": "get_controllers",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "ctrlr": "ssam.0",
+      "cpumask": "0x1",
+      "session_num": 1,
+      "backend_specific": {
+        "session": [
+          {
+            "name": "ssam.0_blk_16",
+            "function_id": 16,
+            "queues": 8,
+            "block": {
+              "readonly": false,
+              "bdev": "Malloc0"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+~~~
+
+### get_scsi_controllers {#rpc_ssam_get_scsi_controllers}
+
+Get information about configured ssam scsi controllers
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | Name of scsi controller
+
+#### Result
+
+List of ssam scsi controllers.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0"
+  },
+  "jsonrpc": "2.0",
+  "method": "get_scsi_controllers",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": []
+}
+~~~
+
+### controller_get_iostat {#rpc_ssam_controller_get_iostat}
+
+Get iostat about configured ssam controllers
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+function_id             | Optional | number      | Function id of PCI device
+dbdf                    | Optional | string      | Dbdf of PCI device
+
+#### Result
+
+List of iostat of ssam controllers.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "function_id": null,
+    "dbdf": null
+  },
+  "jsonrpc": "2.0",
+  "method": "controller_get_iostat",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tick_rate": 100000000,
+    "dbdfs": [
+      {
+        "name": "ssam.0",
+        "flight_io": 0,
+        "discard_io_num": 0,
+        "wait_io": 0,
+        "wait_io_r": 0
+      },
+      {
+        "function_id": 16,
+        "poll_lat": "0.000000268",
+        "bdev_name": "Malloc0",
+        "bytes_read": 0,
+        "num_read_ops": 0,
+        "bytes_written": 0,
+        "num_write_ops": 0,
+        "read_latency_ticks": 0,
+        "write_latency_ticks": 0,
+        "complete_read_ios": 0,
+        "err_read_ios": 0,
+        "complete_write_ios": 0,
+        "err_write_ios": 0,
+        "flush_ios": 0,
+        "complete_flush_ios": 0,
+        "err_flush_ios": 0,
+        "other_ios": 0,
+        "complete_other_ios": 0,
+        "err_other_ios": 0,
+        "fatal_ios": 0,
+        "io_retry": 0,
+        "counters": {
+          "start_count": 0,
+          "dma_count": 0,
+          "dma_complete_count": 0,
+          "bdev_count": 0,
+          "bdev_complete_count": 0
+        },
+        "details": {
+          "count": 0,
+          "total_lat": "0.000000000",
+          "dma_lat": "0.000000000",
+          "bdev_lat": "0.000000000",
+          "bdev_submit_lat": "0.000000000",
+          "complete_lat": "0.000000000",
+          "internal_lat": "0.000000000"
+        }
+      }
+    ]
+  }
+}
+~~~
+
+### blk_device_iostat {#rpc_ssam_blk_device_iostat}
+
+Get iostat about blk device
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+index                   | Required | number      | Function id or dbdf of PCI device
+tid                     | Optional | number      | Tid
+vq_idx                  | Optional | number      | Index of vqueue
+
+#### Result
+
+List of iostat of ssam blk controllers.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "index": "16",
+    "tid": null,
+    "vq_idx": null
+  },
+  "jsonrpc": "2.0",
+  "method": "blk_device_iostat",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tick_rate": 100000000,
+    "dbdfs": [
+      {
+        "function_id": 16,
+        "poll_lat": "0.000000267",
+        "bdev_name": "Malloc0",
+        "bytes_read": 0,
+        "num_read_ops": 0,
+        "bytes_written": 0,
+        "num_write_ops": 0,
+        "read_latency_ticks": 0,
+        "write_latency_ticks": 0,
+        "complete_read_ios": 0,
+        "err_read_ios": 0,
+        "complete_write_ios": 0,
+        "err_write_ios": 0,
+        "flush_ios": 0,
+        "complete_flush_ios": 0,
+        "err_flush_ios": 0,
+        "other_ios": 0,
+        "complete_other_ios": 0,
+        "err_other_ios": 0,
+        "fatal_ios": 0,
+        "io_retry": 0,
+        "counters": {
+          "start_count": 0,
+          "dma_count": 0,
+          "dma_complete_count": 0,
+          "bdev_count": 0,
+          "bdev_complete_count": 0
+        },
+        "details": {
+          "count": 0,
+          "total_lat": "0.000000000",
+          "dma_lat": "0.000000000",
+          "bdev_lat": "0.000000000",
+          "bdev_submit_lat": "0.000000000",
+          "complete_lat": "0.000000000",
+          "internal_lat": "0.000000000"
+        }
+      }
+    ]
+  }
+}
+~~~
+
+### controller_clear_iostat {#rpc_ssam_controller_clear_iostat}
+
+Clear iostat about configured ssam controllers
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "controller_clear_iostat",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### bdev_resize {#rpc_ssam_bdev_resize}
+
+Resize bdev in the system
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+function_id             | Required | number      | Function id of PCI device
+new_size_in_mb          | Required | number      | New bdev size for resize operation. The unit is MiB
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "function_id": "16",
+    "new_size_in_mb": 1024
+  },
+  "jsonrpc": "2.0",
+  "method": "bdev_resize",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### scsi_bdev_resize {#rpc_ssam_scsi_bdev_resize}
+
+Resize scsi bdev in the system
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Controller name of PCI device
+tgt_id                  | Required | number      | Tgt id of bdev
+new_size_in_mb          | Required | number      | New bdev size for resize operation. The unit is MiB
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0",
+    "function_id": "0",
+    "new_size_in_mb": 1024
+  },
+  "jsonrpc": "2.0",
+  "method": "scsi_bdev_resize",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### bdev_aio_resize {#rpc_ssam_bdev_aio_resize}
+
+Resize aio bdev in the system
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Aio bdev name
+new_size_in_mb          | Required | number      | New bdev size for resize operation. The unit is MiB
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "aio0",
+    "new_size_in_mb": 1024
+  },
+  "jsonrpc": "2.0",
+  "method": "bdev_aio_resize",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### os_ready {#rpc_os_ready}
+
+Write ready flag for booting OS
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "os_ready",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### os_not_ready {#rpc_set_os_status}
+
+Write not ready flag for booting OS
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "os_not_ready",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### create_scsi_controller {#rpc_ssam_create_scsi_controller}
+
+Create ssam scsi controller
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+dbdf                    | Required | string      | The pci dbdf of virtio scsi controller
+name                    | Required | string      | Controller name to be create
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "dbdf": "0000:01:02.0",
+    "name": "scsi0"
+  },
+  "jsonrpc": "2.0",
+  "method": "create_scsi_controller",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### scsi_controller_add_target {#rpc_ssam_scsi_controller_add_target}
+
+Add LUN to ssam scsi controller target
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Controller name where add lun
+scsi_tgt_num            | Required | number      | Target number to use
+bdev_name               | Required | string      | Name of bdev to add to target
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0",
+    "scsi_tgt_num": 0,
+    "bdev_name": "aio0"
+  },
+  "jsonrpc": "2.0",
+  "method": "scsi_controller_add_target",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### scsi_controller_remove_target {#rpc_ssam_scsi_controller_remove_target}
+
+Remove LUN from ssam scsi controller target
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Controller name where remove lun
+scsi_tgt_num            | Required | number      | Target number to use
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0",
+    "scsi_tgt_num": 0
+  },
+  "jsonrpc": "2.0",
+  "method": "scsi_controller_remove_target",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "true"
+}
+~~~
+
+### scsi_device_iostat {#rpc_ssam_scsi_device_iostat}
+
+Get iostat about scsi device
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Controller name
+scsi_tgt_num            | Required | number      | Target number
+
+#### Result
+
+List of iostat of ssam scsi controllers.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "scsi0",
+    "scsi_tgt_num": 0
+  },
+  "jsonrpc": "2.0",
+  "method": "scsi_device_iostat",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": []
+}
+~~~
+
+### device_pcie_list {#rpc_ssam_device_pcie_list}
+
+Show storage device pcie list
+
+#### Result
+
+List of storage device pcie.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "device_pcie_list",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+  "device_pcie_list": [
+      {
+        "index": 16,
+        "dbdf": "0001:75:02.0",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 17,
+        "dbdf": "0001:75:02.1",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 18,
+        "dbdf": "0001:75:02.2",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 19,
+        "dbdf": "0001:75:02.3",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 20,
+        "dbdf": "0001:75:02.4",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 21,
+        "dbdf": "0001:75:02.5",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 22,
+        "dbdf": "0001:75:02.6",
+        "type": "virtio-blk"
+      },
+      {
+        "index": 23,
+        "dbdf": "0001:75:02.7",
+        "type": "virtio-blk"
+      }
+    ]
+  }
 }
 ~~~

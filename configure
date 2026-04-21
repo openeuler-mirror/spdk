@@ -134,6 +134,8 @@ function usage() {
 	echo " --without-golang          No path required."
 	echo " --with-aio-fsdev          Build aio FSDEV component."
 	echo " --without-aio-fsdev       No path required."
+	echo " --with-ssam               Support to build ssam for DPU storage accel."
+	echo " --without-ssam            No path required."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -627,6 +629,15 @@ for i in "$@"; do
 			;;
 		--without-fuse)
 			CONFIG[FUSE]=n
+			;;
+		--with-ssam)
+			CONFIG[SSAM]=y
+			;;
+		--without-ssam)
+			CONFIG[SSAM]=n
+			;;
+        --with-ssam-only)
+			CONFIG[SSAM_ONLY]=y
 			;;
 		--with-nvme-cuse)
 			CONFIG[NVME_CUSE]=y
@@ -1213,6 +1224,13 @@ if [[ "${CONFIG[FUSE]}" = "y" ]]; then
 		echo "Please install then re-run this script."
 		exit 1
 	fi
+fi
+
+if [[ "${CONFIG[SSAM_ONLY]}" = "y" ]]; then
+    if [[ "${CONFIG[SSAM]}" = "n" ]]; then
+        echo "--with-ssam-only requires --with-ssam."
+        exit 1
+    fi
 fi
 
 if [ "${CONFIG[CET]}" = "y" ]; then
