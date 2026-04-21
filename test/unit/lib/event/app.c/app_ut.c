@@ -22,7 +22,7 @@ DEFINE_STUB_V(spdk_rpc_register_alias_deprecated, (const char *method, const cha
 DEFINE_STUB_V(spdk_rpc_set_state, (uint32_t state));
 DEFINE_STUB(spdk_rpc_get_state, uint32_t, (void), SPDK_RPC_RUNTIME);
 DEFINE_STUB(spdk_rpc_initialize, int, (const char *listen_addr,
-				       const struct spdk_rpc_opts *opts), 0);
+				       const struct spdk_rpc_opts *opts, int internval), 0);
 DEFINE_STUB_V(spdk_rpc_set_allowlist, (const char **rpc_allowlist));
 DEFINE_STUB_V(spdk_rpc_finish, (void));
 DEFINE_STUB_V(spdk_rpc_server_finish, (const char *listen_addr));

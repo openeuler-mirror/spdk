@@ -27,6 +27,7 @@ endif
 DIRS-$(CONFIG_OCF) += env_ocf
 DIRS-$(CONFIG_IDXD) += idxd
 DIRS-$(CONFIG_VHOST) += vhost
+DIRS-$(CONFIG_SSAM) += ssam
 DIRS-$(CONFIG_VIRTIO) += virtio
 DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_RDMA) += rdma_provider

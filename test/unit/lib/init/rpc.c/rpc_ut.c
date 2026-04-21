@@ -84,12 +84,12 @@ initialize_servers(void)
 
 	CU_ASSERT(STAILQ_EMPTY(&g_init_rpc_servers));
 
-	rc = spdk_rpc_initialize(g_test_addr1, NULL);
+	rc = spdk_rpc_initialize(g_test_addr1, NULL, RPC_SELECT_INTERVAL);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(server_exists(g_test_addr1));
 	CU_ASSERT(server_paused(g_test_addr1) == false);
 
-	rc = spdk_rpc_initialize(g_test_addr2, NULL);
+	rc = spdk_rpc_initialize(g_test_addr2, NULL, RPC_SELECT_INTERVAL);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(server_exists(g_test_addr2));
 	CU_ASSERT(server_paused(g_test_addr2) == false);
@@ -137,13 +137,13 @@ test_rpc_set_spdk_log_opts(void)
 	server2_opts.log_level = SPDK_LOG_ERROR;
 	server2_opts.size = sizeof(server2_opts);
 
-	spdk_rpc_initialize(g_test_addr1, &server1_opts);
+	spdk_rpc_initialize(g_test_addr1, &server1_opts, RPC_SELECT_INTERVAL);
 	CU_ASSERT(g_test_log_file == server1_opts.log_file);
 	CU_ASSERT(g_test_log_level == server1_opts.log_level);
 	CU_ASSERT(g_test_log_file_set_count == 1);
 	CU_ASSERT(g_test_log_level_set_count == 1);
 
-	spdk_rpc_initialize(g_test_addr2, &server2_opts);
+	spdk_rpc_initialize(g_test_addr2, &server2_opts, RPC_SELECT_INTERVAL);
 	CU_ASSERT(g_test_log_file == server2_opts.log_file);
 	CU_ASSERT(g_test_log_level == server2_opts.log_level);
 	CU_ASSERT(g_test_log_file_set_count == 2);
@@ -160,13 +160,13 @@ test_rpc_set_spdk_log_default_opts(void)
 
 	reset_global_counters();
 
-	spdk_rpc_initialize(g_test_addr1, NULL);
+	spdk_rpc_initialize(g_test_addr1, NULL, RPC_SELECT_INTERVAL);
 	CU_ASSERT(g_test_log_file == test_log_file_default);
 	CU_ASSERT(g_test_log_level == test_log_level_default);
 	CU_ASSERT(g_test_log_file_set_count == 1);
 	CU_ASSERT(g_test_log_level_set_count == 1);
 
-	spdk_rpc_initialize(g_test_addr2, NULL);
+	spdk_rpc_initialize(g_test_addr2, NULL, RPC_SELECT_INTERVAL);
 	CU_ASSERT(g_test_log_file == test_log_file_default);
 	CU_ASSERT(g_test_log_level == test_log_level_default);
 	CU_ASSERT(g_test_log_file_set_count == 1);

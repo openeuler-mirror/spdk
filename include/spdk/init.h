@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 #define SPDK_DEFAULT_RPC_ADDR "/var/tmp/spdk.sock"
+#define RPC_SELECT_INTERVAL	4000 /* 4ms */
 
 /**
  * Structure with optional parameters for the JSON-RPC server initialization.
@@ -53,7 +54,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_rpc_opts) == 24, "Incorrect size");
  * \return Negated errno on failure. 0 on success.
  */
 int spdk_rpc_initialize(const char *listen_addr,
-			const struct spdk_rpc_opts *opts);
+			const struct spdk_rpc_opts *opts, int internval);
 
 /**
  * Stop SPDK JSON-RPC servers and stop polling for new connections on all addresses.
@@ -126,6 +127,10 @@ void spdk_rpc_server_pause(const char *listen_addr);
  * \param listen_addr Address, on which RPC server listens for connections.
  */
 void spdk_rpc_server_resume(const char *listen_addr);
+
+void spdk_ssam_set_hot_restart(bool value);
+
+bool spdk_ssam_get_hot_restart(void);
 
 #ifdef __cplusplus
 }

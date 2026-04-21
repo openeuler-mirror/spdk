@@ -151,8 +151,8 @@ struct spdk_app_opts {
 
 	bool enforce_numa;
 
-	/* Hole at bytes 187-191. */
-	uint8_t reserved187[5];
+	/* Hole at bytes 187-190. */
+	uint8_t reserved187[4];
 
 	/**
 	 * The allocated size for the message pool used by the threading library.
@@ -161,6 +161,7 @@ struct spdk_app_opts {
 	 */
 	size_t msg_mempool_size;
 
+	bool hot_restart;
 	/*
 	 *  If non-NULL, a string array of allowed RPC methods.
 	 */
@@ -273,6 +274,8 @@ void spdk_app_stop(int rc);
  * \return shared memory id.
  */
 int spdk_app_get_shm_id(void);
+
+bool spdk_get_shutdown_sig_received(void);
 
 /**
  * Convert a string containing a CPU core mask into a bitmask
