@@ -62,6 +62,12 @@ spdk_app_get_shm_id(void)
 	return g_spdk_app.shm_id;
 }
 
+bool
+spdk_get_shutdown_sig_received(void)
+{
+	return g_shutdown_sig_received;
+}
+
 /* append one empty option to indicate the end of the array */
 static const struct option g_cmdline_options[] = {
 #define CONFIG_FILE_OPT_IDX	'c'
@@ -130,6 +136,10 @@ static const struct option g_cmdline_options[] = {
 	{"vfio-vf-token",		required_argument,	NULL, ENV_VF_TOKEN_OPT_IDX},
 #define MSG_MEMPOOL_SIZE_OPT_IDX 270
 	{"msg-mempool-size",		required_argument,	NULL, MSG_MEMPOOL_SIZE_OPT_IDX},
+#define HOT_RESTART_OPT_IDX 271
+	{"hot-restart",		no_argument,	NULL, HOT_RESTART_OPT_IDX},
+#define HOT_UPGRADE_OPT_IDX 272
+	{"hot-upgrade",		no_argument,	NULL, HOT_UPGRADE_OPT_IDX},
 };
 
 static void
@@ -274,7 +284,7 @@ app_start_rpc(int rc, void *arg1)
 
 	spdk_rpc_set_allowlist(g_spdk_app.rpc_allowlist);
 
-	rc = spdk_rpc_initialize(g_spdk_app.rpc_addr);
+	rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, RPC_SELECT_INTERVAL);
 	if (rc) {
 		spdk_app_stop(rc);
 		return;
@@ -342,6 +352,7 @@ app_setup_env(struct spdk_app_opts *opts)
 	env_opts.env_context = opts->env_context;
 	env_opts.iova_mode = opts->iova_mode;
 	env_opts.vf_token = opts->vf_token;
+	env_opts.hot_restart = opts->hot_restart;
 
 	rc = spdk_env_init(&env_opts);
 	free(env_opts.pci_blocked);
@@ -473,7 +484,7 @@ bootstrap_fn(void *arg1)
 		} else {
 			spdk_rpc_set_allowlist(g_spdk_app.rpc_allowlist);
 
-			rc = spdk_rpc_initialize(g_spdk_app.rpc_addr);
+			rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, RPC_SELECT_INTERVAL);
 			if (rc) {
 				spdk_app_stop(rc);
 				return;
@@ -520,13 +531,15 @@ app_copy_opts(struct spdk_app_opts *opts, struct spdk_app_opts *opts_user, size_
 	SET_FIELD(log);
 	SET_FIELD(base_virtaddr);
 	SET_FIELD(disable_signal_handlers);
+	SET_FIELD(hot_restart);
+	SET_FIELD(hot_upgrade);
 	SET_FIELD(msg_mempool_size);
 	SET_FIELD(rpc_allowlist);
 	SET_FIELD(vf_token);
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 216, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 217, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -882,6 +895,8 @@ usage(void (*app_usage)(void))
 	printf("     --rpcs-allowed	   comma-separated list of permitted RPCS\n");
 	printf("     --env-context         Opaque context for use of the env implementation\n");
 	printf("     --vfio-vf-token       VF token (UUID) shared between SR-IOV PF and VFs for vfio_pci driver\n");
+	printf("     --hot-restart       enable hot restart\n");
+	printf("     --hot-upgrade       enable hot upgrade\n");
 	spdk_log_usage(stdout, "-L");
 	spdk_trace_mask_usage(stdout, "-e");
 	if (app_usage) {
@@ -1156,6 +1171,12 @@ spdk_app_parse_args(int argc, char **argv, struct spdk_app_opts *opts,
 			printf(SPDK_VERSION_STRING"\n");
 			retval = SPDK_APP_PARSE_ARGS_HELP;
 			goto out;
+		case HOT_RESTART_OPT_IDX:
+			opts->hot_restart = true;
+			break;
+		case HOT_UPGRADE_OPT_IDX:
+			opts->hot_upgrade = true;
+			break;
 		case '?':
 			/*
 			 * In the event getopt() above detects an option

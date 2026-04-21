@@ -57,7 +57,7 @@ CONFIG_TESTS=y
 CONFIG_UNIT_TESTS=y
 
 # Build examples
-CONFIG_EXAMPLES=y
+CONFIG_EXAMPLES=n
 
 # Build apps
 CONFIG_APPS=y
@@ -118,6 +118,9 @@ CONFIG_UBLK=n
 
 # Build vhost library.
 CONFIG_VHOST=y
+
+# Build ssam library.
+CONFIG_SSAM=y
 
 # Build vhost initiator (Virtio) driver.
 CONFIG_VIRTIO=y

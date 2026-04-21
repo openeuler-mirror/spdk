@@ -16,6 +16,7 @@
 #include "spdk/scheduler.h"
 #include "spdk/string.h"
 #include "spdk/fd_group.h"
+#include "spdk/init.h"
 
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -885,6 +886,11 @@ _reactor_run(struct spdk_reactor *reactor)
 	struct spdk_lw_thread	*lw_thread, *tmp;
 	uint64_t		now;
 	int			rc;
+
+	int upgrade_status = spdk_ssam_get_hot_upgrade_status();
+	if (spdk_unlikely(upgrade_status != SSAM_HOT_UPGRADE_DONE && reactor != g_scheduling_reactor )) {
+		usleep(1);
+	}
 
 	event_queue_run_batch(reactor);
 

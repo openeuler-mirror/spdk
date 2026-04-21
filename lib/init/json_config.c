@@ -19,6 +19,8 @@
 #include "spdk_internal/event.h"
 
 #define SPDK_DEBUG_APP_CFG(...) SPDK_DEBUGLOG(app_config, __VA_ARGS__)
+#define SPDK_JSON_CONFIG_HOT_RESTART_INTERVAL    4       /* 4us */
+#define SPDK_JSON_CONFIG_SELECT_INTERNAL         4000    /* 4ms */
 
 /* JSON configuration format is as follows
  *
@@ -331,6 +333,15 @@ app_json_config_load_subsystem_config_entry(void *_ctx)
 	uint32_t state_mask = 0, cur_state_mask, startup_runtime = SPDK_RPC_STARTUP | SPDK_RPC_RUNTIME;
 	int rc;
 
+	if (spdk_get_shutdown_sig_received()) {
+		/*
+		 * In the hot restart process, when this callback is triggered,
+		 * rpc and thread may have been released.
+		 * Therefore, dont continue.
+		 */
+		return;
+	}
+
 	if (ctx->config_it == NULL) {
 		SPDK_DEBUG_APP_CFG("Subsystem '%.*s': configuration done.\n", ctx->subsystem_name->len,
 				   (char *)ctx->subsystem_name->start);
@@ -557,6 +568,32 @@ err:
 	return rc;
 }
 
+static bool g_hot_restart_flag = false;
+static int g_hot_upgrade_status = 0;
+bool
+spdk_ssam_get_hot_restart(void)
+{
+	return g_hot_restart_flag;
+}
+
+void
+spdk_ssam_set_hot_restart(bool value)
+{
+	g_hot_restart_flag = value;
+}
+
+int
+spdk_ssam_get_hot_upgrade_status(void)
+{
+    return g_hot_upgrade_status;
+}
+
+void
+spdk_ssam_set_hot_upgrade_status(int value)
+{
+    g_hot_upgrade_status = value;
+}
+
 void
 spdk_subsystem_init_from_json_config(const char *json_config_file, const char *rpc_addr,
 				     spdk_subsystem_init_fn cb_fn, void *cb_arg,
@@ -564,6 +601,7 @@ spdk_subsystem_init_from_json_config(const char *json_config_file, const char *r
 {
 	struct load_json_config_ctx *ctx = calloc(1, sizeof(*ctx));
 	int rc;
+	int internal;
 
 	assert(cb_fn);
 	if (!ctx) {
@@ -618,7 +656,12 @@ spdk_subsystem_init_from_json_config(const char *json_config_file, const char *r
 		goto fail;
 	}
 
-	rc = spdk_rpc_initialize(ctx->rpc_socket_path_temp);
+	if (spdk_ssam_get_hot_restart() == true) {
+		internal = SPDK_JSON_CONFIG_HOT_RESTART_INTERVAL;
+	} else {
+		internal = SPDK_JSON_CONFIG_SELECT_INTERNAL;
+	}
+	rc = spdk_rpc_initialize(ctx->rpc_socket_path_temp, internal);
 	if (rc) {
 		goto fail;
 	}

@@ -18,6 +18,7 @@ extern "C" {
 #endif
 
 #define SPDK_DEFAULT_RPC_ADDR "/var/tmp/spdk.sock"
+#define RPC_SELECT_INTERVAL	4000 /* 4ms */
 
 /**
  * Create the SPDK JSON-RPC server and listen at the provided address. The RPC server is optional and is
@@ -27,7 +28,7 @@ extern "C" {
  *
  * \return Negated errno on failure. 0 on success.
  */
-int spdk_rpc_initialize(const char *listen_addr);
+int spdk_rpc_initialize(const char *listen_addr, int internval);
 
 /**
  * Shut down the SPDK JSON-RPC target
@@ -71,6 +72,20 @@ typedef void (*spdk_subsystem_fini_fn)(void *ctx);
  * \param cb_arg User context passed to cb_fn
  */
 void spdk_subsystem_fini(spdk_subsystem_fini_fn cb_fn, void *cb_arg);
+
+void spdk_ssam_set_hot_restart(bool value);
+
+bool spdk_ssam_get_hot_restart(void);
+
+enum ssam_hot_upgrade_status {
+	SSAM_HOT_UPGRADE_DONE,
+	SSAM_HOT_UPGRADE_BEGIN,
+	SSAM_HOT_UPGRADE_INIT_DONE,
+};
+
+int spdk_ssam_get_hot_upgrade_status(void);
+
+void spdk_ssam_set_hot_upgrade_status (int value);
 
 #ifdef __cplusplus
 }

@@ -675,7 +675,7 @@ nvmf_subsystem_init_done(int rc, void *cb_arg)
 {
 	fprintf(stdout, "bdev subsystem init successfully\n");
 
-	rc = spdk_rpc_initialize(g_rpc_addr);
+	rc = spdk_rpc_initialize(g_rpc_addr, RPC_SELECT_INTERVAL);
 	if (rc) {
 		spdk_app_stop(rc);
 		return;
