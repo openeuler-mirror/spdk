@@ -179,6 +179,7 @@ DEPDIRS-event_vhost_scsi := init vhost event_scheduler event_scsi
 DEPDIRS-event_sock := init sock
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
+DEPDIRS-event_ssam := init ssam event_scsi
 
 # module/vfu_device
 

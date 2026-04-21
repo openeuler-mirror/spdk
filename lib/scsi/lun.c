@@ -10,6 +10,8 @@
 #include "spdk/thread.h"
 #include "spdk/util.h"
 #include "spdk/likely.h"
+#include "spdk/event.h"
+#include "spdk/bdev_module.h"
 
 static void scsi_lun_execute_tasks(struct spdk_scsi_lun *lun);
 static void _scsi_lun_execute_mgmt_task(struct spdk_scsi_lun *lun);
@@ -341,6 +343,16 @@ static void
 _scsi_lun_hot_remove(void *arg1)
 {
 	struct spdk_scsi_lun *lun = arg1;
+
+	if (spdk_unlikely(spdk_get_shutdown_sig_received())) {
+		/*
+		 * In the hot restart process, when this callback is triggered,
+		 * the task and bdev_io memory may have been released.
+		 * Therefore, outstanding task are not executed in this scenario.
+		 */
+		scsi_lun_notify_hot_remove(lun);
+		return;
+	}
 
 	/* If lun->removed is set, no new task can be submitted to the LUN.
 	 * Execute previously queued tasks, which will be immediately aborted.

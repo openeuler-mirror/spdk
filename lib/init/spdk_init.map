@@ -12,6 +12,10 @@
 
 	spdk_rpc_initialize;
 	spdk_rpc_finish;
+	spdk_ssam_get_hot_restart;
+	spdk_ssam_set_hot_restart;
+	spdk_ssam_get_hot_upgrade_status;
+	spdk_ssam_set_hot_upgrade_status;
 
 	local: *;
 };

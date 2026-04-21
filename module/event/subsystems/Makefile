@@ -16,6 +16,7 @@ endif
 endif
 
 DIRS-$(CONFIG_VHOST) += vhost_blk vhost_scsi
+DIRS-$(CONFIG_SSAM) += ssam
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
 
 # These dependencies are not based specifically on symbols, but rather
@@ -30,6 +31,7 @@ DEPDIRS-ublk := bdev
 DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost_scsi := scsi
+DEPDIRS-ssam := scsi
 
 .PHONY: all clean $(DIRS-y)
 

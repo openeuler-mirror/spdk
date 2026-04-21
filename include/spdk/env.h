@@ -64,6 +64,7 @@ struct spdk_env_opts {
 	/** Opaque context for use of the env implementation. */
 	void			*env_context;
 	const char		*vf_token;
+	bool		hot_restart;
 };
 
 /**

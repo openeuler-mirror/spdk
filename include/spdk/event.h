@@ -143,9 +143,12 @@ struct spdk_app_opts {
 	 */
 	bool disable_signal_handlers;
 
-	/* Hole at bytes 185-191. */
-	uint8_t reserved185[7];
+	/* Hole at bytes 185-190. */
+	uint8_t reserved185[6];
 
+	bool		hot_restart;
+
+	bool		hot_upgrade;
 	/**
 	 * The allocated size for the message pool used by the threading library.
 	 *
@@ -164,7 +167,7 @@ struct spdk_app_opts {
 	 */
 	const char		*vf_token;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 216, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 217, "Incorrect size");
 
 /**
  * Initialize the default value of opts
@@ -238,6 +241,8 @@ void spdk_app_stop(int rc);
  * \return shared memory id.
  */
 int spdk_app_get_shm_id(void);
+
+bool spdk_get_shutdown_sig_received(void);
 
 /**
  * Convert a string containing a CPU core mask into a bitmask

@@ -1,0 +1,16 @@
+{
+    global:
+
+    # public functions
+    spdk_ssam_user_config_init;
+    spdk_ssam_exit;
+    spdk_ssam_subsystem_fini;
+    spdk_ssam_subsystem_init;
+    spdk_ssam_config_json;
+    spdk_ssam_set_shm_created;
+    spdk_ssam_get_shm_created;
+    spdk_ssam_io_poller_start;
+    spdk_ssam_rc_preinit;
+
+    local: *;
+};

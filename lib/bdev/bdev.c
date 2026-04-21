@@ -23,6 +23,7 @@
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
 #include "spdk/string.h"
+#include "spdk/event.h"
 
 #include "bdev_internal.h"
 #include "spdk_internal/trace_defs.h"
@@ -645,6 +646,9 @@ bdev_ok_to_examine(struct spdk_bdev *bdev)
 static void
 bdev_examine(struct spdk_bdev *bdev)
 {
+	if (spdk_ssam_get_hot_restart() == true) {
+		return;
+	}
 	struct spdk_bdev_module *module;
 	uint32_t action;
 
@@ -3207,6 +3211,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_shared_resource *shared_resource;
 	struct lba_range *range;
+	struct spdk_bdev_io *bdev_io, *tmp;
 
 	bdev_free_io_stat(ch->stat);
 #ifdef SPDK_CONFIG_VTUNE
@@ -3222,6 +3227,11 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	spdk_put_io_channel(ch->channel);
 
 	shared_resource = ch->shared_resource;
+	ch->shared_resource = NULL;
+
+	TAILQ_FOREACH_SAFE(bdev_io, &ch->io_submitted, internal.ch_link, tmp) {
+		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_ABORTED);
+	}
 
 	assert(TAILQ_EMPTY(&ch->io_locked));
 	assert(TAILQ_EMPTY(&ch->io_submitted));
@@ -6465,6 +6475,15 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 	struct spdk_bdev *bdev = bdev_io->bdev;
 	struct spdk_bdev_channel *bdev_ch = bdev_io->internal.ch;
 	struct spdk_bdev_shared_resource *shared_resource = bdev_ch->shared_resource;
+
+	if (spdk_unlikely(spdk_get_shutdown_sig_received())) {
+		/*
+		 * In the hot restart process, when this callback is triggered,
+		 * the bdev buf memory may have been released.
+		 * Therefore, do not need to continue.
+		 */
+		return;
+	}
 
 	bdev_io->internal.status = status;
 
