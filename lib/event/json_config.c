@@ -355,6 +355,15 @@ app_json_config_load_subsystem_config_entry(void *_ctx)
 	size_t params_len = 0;
 	int rc;
 
+	if (spdk_get_shutdown_sig_received()) {
+		/*
+		 * In the hot restart process, when this callback is triggered,
+		 * rpc and thread may have been released.
+		 * Therefore, dont continue.
+		 */
+		return;
+	}
+
 	if (ctx->config_it == NULL) {
 		SPDK_DEBUG_APP_CFG("Subsystem '%.*s': configuration done.\n", ctx->subsystem_name->len,
 				   (char *)ctx->subsystem_name->start);

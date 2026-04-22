@@ -232,6 +232,8 @@ void spdk_app_stop(int rc);
  */
 int spdk_app_get_shm_id(void);
 
+bool spdk_get_shutdown_sig_received(void);
+
 /**
  * Convert a string containing a CPU core mask into a bitmask
  *

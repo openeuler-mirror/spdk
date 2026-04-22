@@ -42,9 +42,11 @@
 #include "spdk/rpc.h"
 #include "spdk/string.h"
 #include "spdk/iscsi_spec.h"
+#include "spdk/likely.h"
 
 #include "spdk/log.h"
 #include "spdk/bdev_module.h"
+#include "spdk/event.h"
 
 #include "iscsi/iscsi.h"
 #include "iscsi/scsi-lowlevel.h"
@@ -55,6 +57,7 @@ struct bdev_iscsi_lun;
 
 #define BDEV_ISCSI_CONNECTION_POLL_US 500 /* 0.5 ms */
 #define BDEV_ISCSI_NO_MAIN_CH_POLL_US 10000 /* 10ms */
+#define BDEV_ISCSI_TIMEOUT 10 /* 10s */
 
 #define DEFAULT_INITIATOR_NAME "iqn.2016-06.io.spdk:init"
 
@@ -85,6 +88,8 @@ struct bdev_iscsi_lun {
 	struct spdk_thread		*no_main_ch_poller_td;
 	bool				unmap_supported;
 	struct spdk_poller		*poller;
+	uint32_t unfinished_io_num;
+	uint64_t event_tsc;
 };
 
 struct bdev_iscsi_io_channel {
@@ -101,6 +106,7 @@ struct bdev_iscsi_conn_req {
 	bool					unmap_supported;
 	int					lun;
 	int					status;
+	int                 attempts;
 	TAILQ_ENTRY(bdev_iscsi_conn_req)	link;
 };
 
@@ -130,6 +136,7 @@ _iscsi_free_lun(void *arg)
 	struct bdev_iscsi_lun *lun = arg;
 
 	assert(lun != NULL);
+	SPDK_NOTICELOG("iscsi bdev %s removed.\n", lun->bdev.name);
 	iscsi_destroy_context(lun->context);
 	pthread_mutex_destroy(&lun->mutex);
 	free(lun->bdev.name);
@@ -195,6 +202,9 @@ static void
 bdev_iscsi_io_complete(struct bdev_iscsi_io *iscsi_io, enum spdk_bdev_io_status status)
 {
 	iscsi_io->status = status;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(iscsi_io);
+	struct bdev_iscsi_lun *lun = (struct bdev_iscsi_lun *)bdev_io->bdev->ctxt;
+	lun->unfinished_io_num--;
 	if (iscsi_io->submit_td != NULL) {
 		spdk_thread_send_msg(iscsi_io->submit_td, _bdev_iscsi_io_complete, iscsi_io);
 	} else {
@@ -206,6 +216,16 @@ bdev_iscsi_io_complete(struct bdev_iscsi_io *iscsi_io, enum spdk_bdev_io_status 
 static void
 bdev_iscsi_command_cb(struct iscsi_context *context, int status, void *_task, void *_iscsi_io)
 {
+
+	if (spdk_unlikely(spdk_get_shutdown_sig_received())) {
+		/*
+		 * In the hot restart process, when this callback is triggered,
+		 * the _task memory may have been released.
+		 * Therefore, _task are not released in this scenario.
+		 */
+		return;
+	}
+
 	struct scsi_task *task = _task;
 	struct bdev_iscsi_io *iscsi_io = _iscsi_io;
 
@@ -277,6 +297,17 @@ static void
 bdev_iscsi_destruct_cb(void *ctx)
 {
 	struct bdev_iscsi_lun *lun = ctx;
+
+	/* when main_td and no_main_ch_poller_td have different cores,
+	 * ensure that the poller is deregistered before free lun.
+	 */
+	pthread_mutex_lock(&lun->mutex);
+	if (lun->ch_count > 0) {
+		pthread_mutex_unlock(&lun->mutex);
+		spdk_thread_send_msg(lun->no_main_ch_poller_td, bdev_iscsi_destruct_cb, lun);
+		return;
+	}
+	pthread_mutex_unlock(&lun->mutex);
 
 	spdk_poller_unregister(&lun->no_main_ch_poller);
 	spdk_io_device_unregister(lun, _iscsi_free_lun);
@@ -379,12 +410,38 @@ bdev_iscsi_poll_lun(void *_lun)
 		return SPDK_POLLER_IDLE;
 	}
 
+	/* When the default route is deleted, the TCP connection cannot be reconnected.
+	 * Therefore, if fd not open, hot restart SSAM.
+	 */
+	if (pfd.revents == POLLNVAL) {
+		SPDK_WARNLOG("fd not open, hot restart SSAM.\n");
+		sleep(1);
+		raise(SIGTERM);
+	}
+
 	if (pfd.revents != 0) {
+		lun->event_tsc = spdk_get_ticks();
 		if (iscsi_service(lun->context, pfd.revents) < 0) {
 			SPDK_ERRLOG("iscsi_service failed: %s\n", iscsi_get_error(lun->context));
 		}
 
 		return SPDK_POLLER_BUSY;
+	}
+
+	/* When the network is disconnected, the revent obtained by the poll() is always 0.
+	 * As a result, the I/O cannot be responded, causing IO hang.
+	 * Therefore, if no event is obtained within a period of time and there are unfinished I/Os,
+	 * iscsi_service() will be called to obtain the disconnection event.
+	 */
+	uint64_t diff_tsc = spdk_get_ticks() - lun->event_tsc;
+	if (spdk_unlikely((diff_tsc / BDEV_ISCSI_TIMEOUT) >= spdk_get_ticks_hz() &&
+			  lun->unfinished_io_num != 0)) {
+		SPDK_ERRLOG("There is no event while the unfinished io num is not zero(%d)\n",
+			    lun->unfinished_io_num);
+		if (iscsi_service(lun->context, pfd.revents) < 0) {
+			SPDK_ERRLOG("iscsi_service failed: %s\n", iscsi_get_error(lun->context));
+		}
+		lun->event_tsc = spdk_get_ticks();
 	}
 
 	return SPDK_POLLER_IDLE;
@@ -431,7 +488,12 @@ static void _bdev_iscsi_submit_request(void *_bdev_io)
 	struct spdk_bdev_io *bdev_io = _bdev_io;
 	struct bdev_iscsi_io *iscsi_io = (struct bdev_iscsi_io *)bdev_io->driver_ctx;
 	struct bdev_iscsi_lun *lun = (struct bdev_iscsi_lun *)bdev_io->bdev->ctxt;
-
+	if (lun->unfinished_io_num == UINT32_MAX) {
+		bdev_iscsi_io_complete(iscsi_io, SPDK_BDEV_IO_STATUS_FAILED);
+		SPDK_ERRLOG("Too many unfinished io jobs\n");
+		return;
+	}
+	lun->unfinished_io_num++;
 	switch (bdev_io->type) {
 	case SPDK_BDEV_IO_TYPE_READ:
 		spdk_bdev_io_get_buf(bdev_io, bdev_iscsi_get_buf_cb,
@@ -538,6 +600,7 @@ _iscsi_destroy_cb(void *ctx)
 
 	lun->main_td = NULL;
 	spdk_poller_unregister(&lun->poller);
+	SPDK_NOTICELOG("iscsi bdev %s unregister main poller\n", lun->bdev.name);
 
 	pthread_mutex_unlock(&lun->mutex);
 }
@@ -638,6 +701,7 @@ create_iscsi_lun(struct iscsi_context *context, int lun_id, char *url, char *ini
 	lun->lun_id = lun_id;
 	lun->url = url;
 	lun->initiator_iqn = initiator_iqn;
+	lun->event_tsc = spdk_get_ticks();
 
 	pthread_mutex_init(&lun->mutex, NULL);
 
@@ -770,8 +834,32 @@ iscsi_bdev_conn_poll(void *arg)
 
 		if (pfd.revents != 0) {
 			if (iscsi_service(context, pfd.revents) < 0) {
+				req->attempts += 1;
+				if (req->attempts >= 10) {
+					SPDK_ERRLOG("iscsi_service failed times: %d\n", req->attempts);
+					iscsi_connect_cb(context, -1, NULL, req);
+					_bdev_iscsi_conn_req_free(req);
+					continue;
+				}
 				SPDK_ERRLOG("iscsi_service failed: %s\n", iscsi_get_error(context));
 			}
+		}
+
+		if ((pfd.revents & POLLHUP) && (req->status == -1)) {
+			SPDK_NOTICELOG("req->bdev_name(%s) reconnect\n", req->bdev_name);
+			iscsi_destroy_context(req->context);
+			req->context = iscsi_create_context(req->initiator_iqn);
+			struct iscsi_url *iscsi_url = iscsi_parse_full_url(req->context, req->url);
+			int rc = iscsi_set_session_type(req->context, ISCSI_SESSION_NORMAL);
+			rc = rc ? rc : iscsi_set_header_digest(req->context, ISCSI_HEADER_DIGEST_NONE);
+			rc = rc ? rc : iscsi_set_targetname(req->context, iscsi_url->target);
+			rc = iscsi_full_connect_async(req->context, iscsi_url->portal, iscsi_url->lun, iscsi_connect_cb,
+						      req);
+			if (rc < 0) {
+				SPDK_ERRLOG("Failed to connect provided URL=%s: %s\n", req->url, iscsi_get_error(req->context));
+			}
+			iscsi_destroy_url(iscsi_url);
+			sleep(3);
 		}
 
 		if (req->status == 0) {
@@ -847,10 +935,12 @@ create_iscsi_disk(const char *bdev_name, const char *url, const char *initiator_
 
 	iscsi_destroy_url(iscsi_url);
 	req->status = -1;
+	req->attempts = 0;
 	TAILQ_INSERT_TAIL(&g_iscsi_conn_req, req, link);
 	if (!g_conn_poller) {
 		g_conn_poller = SPDK_POLLER_REGISTER(iscsi_bdev_conn_poll, NULL, BDEV_ISCSI_CONNECTION_POLL_US);
 	}
+	SPDK_NOTICELOG("iscsi bdev %s created by %s.\n", req->bdev_name, req->initiator_iqn);
 
 	return 0;
 
