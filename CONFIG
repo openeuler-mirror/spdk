@@ -74,7 +74,7 @@ CONFIG_TESTS=y
 CONFIG_UNIT_TESTS=y
 
 # Build examples
-CONFIG_EXAMPLES=y
+CONFIG_EXAMPLES=n
 
 # Build with Control-flow Enforcement Technology (CET)
 CONFIG_CET=n
@@ -116,6 +116,9 @@ CONFIG_RBD=n
 
 # Build vhost library.
 CONFIG_VHOST=y
+
+# Build ssam library.
+CONFIG_SSAM=y
 
 # Build vhost initiator (Virtio) driver.
 CONFIG_VIRTIO=y

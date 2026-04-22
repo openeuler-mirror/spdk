@@ -42,6 +42,7 @@ DIRS-y += iscsi_tgt
 DIRS-y += spdk_tgt
 DIRS-y += spdk_lspci
 DIRS-y += spdk_top
+DIRS-y += ssam
 ifeq ($(OS),Linux)
 DIRS-$(CONFIG_VHOST) += vhost
 DIRS-y += spdk_dd

@@ -41,6 +41,7 @@ DIRS-y += nbd
 endif
 
 DIRS-$(CONFIG_VHOST) += vhost
+DIRS-$(CONFIG_SSAM) += ssam
 
 # These dependencies are not based specifically on symbols, but rather
 # the subsystem dependency tree defined within the event subsystem C files
@@ -52,6 +53,7 @@ DEPDIRS-nbd := bdev
 DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost := scsi
+DEPDIRS-ssam := scsi
 
 .PHONY: all clean $(DIRS-y)
 
