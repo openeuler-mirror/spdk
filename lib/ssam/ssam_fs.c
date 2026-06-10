@@ -572,7 +572,7 @@ static void lo_readlink(fuse_req_t req, fuse_ino_t ino)
 		return (void)fuse_reply_err(req, errno);
 	}
 
-	if (res == sizeof(fsmsession->static_buf)) {
+	if (res == SSAM_FS_STATIC_BUF_SIZE) {
 		return (void)fuse_reply_err(req, ENAMETOOLONG);
 	}
 
@@ -2367,6 +2367,9 @@ ssam_init_lo_data(struct ssam_fs_construct_info *info, struct lo_data *lo)
 		case CACHE_ALWAYS:
 			lo->timeout = 86400.0;
 			break;
+		default:
+			lo->timeout = 0.0;
+			break;
 		}
 	} else if (lo->timeout < 0) {
 		SPDK_ERRLOG("timeout is negative (%lf)\n", lo->timeout);
@@ -2655,7 +2658,7 @@ int spdk_ssam_fs_poller_init(void)
 						      SSAM_FS_FLR_POLLER_PERIOD);
 	}
 
-	for (int i = 0; i < SSAM_HOSTEP_NUM_MAX; i++) {
+	for (i = 0; i < SSAM_HOSTEP_NUM_MAX; i++) {
 		if (ssam_get_virtio_type(i) != SSAM_DEVICE_VIRTIO_FS) {
 			continue;
 		}

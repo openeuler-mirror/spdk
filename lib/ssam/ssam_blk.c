@@ -41,8 +41,6 @@
         (1ULL << VIRTIO_BLK_F_SCSI)     | (1ULL << VIRTIO_BLK_F_CONFIG_WCE) | \
         (1ULL << VIRTIO_BLK_F_MQ))
 
-extern bool g_ssam_subsystem_exit;
-
 struct ssam_task_stat {
 	uint64_t start_tsc;
 	uint64_t dma_start_tsc;

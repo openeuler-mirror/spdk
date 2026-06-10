@@ -36,8 +36,6 @@
 #define DEVICE_READY_TIMEOUT        15
 #define DEVICE_READY_WAIT_TIME      100000
 
-bool g_ssam_subsystem_exit = false;
-
 struct ssam_event_user_ctx {
 	bool session_freed;  /* true if session has been freed */
 	bool async_done;    /* true if session event done */
