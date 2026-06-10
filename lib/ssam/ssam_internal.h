@@ -66,6 +66,9 @@
 #define SSAM_NORMAL_PROCESS 0
 #define SSAM_HOT_SWAP_PROCESS 1
 
+extern int g_delete_flag;
+extern uint8_t g_hpd_delete_session_times[2000];
+
 enum spdk_ssam_iostat_mode {
 	SSAM_IOSTAT_NORMAL,
 	SSAM_IOSTAT_SUM,
