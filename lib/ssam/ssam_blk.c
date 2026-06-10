@@ -40,11 +40,7 @@
         (1ULL << VIRTIO_BLK_F_SCSI)     | (1ULL << VIRTIO_BLK_F_CONFIG_WCE) | \
         (1ULL << VIRTIO_BLK_F_MQ))
 
-extern bool g_ssam_subsystem_exit;
-
 static int gfunc_session_number = 0;
-extern int delete_flag;
-extern int delete_dev_times[2000];
 static uint8_t g_blk_set_times[2000] = {0};
 
 struct ssam_task_stat {

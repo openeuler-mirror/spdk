@@ -61,6 +61,9 @@
 #define SPDK_SSAM_VIRTIO_BLK_DEFAULT_FEATURE     0x3f11001046
 #define SPDK_SSAM_VIRTIO_SCSI_DEFAULT_FEATURE    0x3f11000007
 
+extern int delete_flag;
+extern int delete_dev_times[2000];
+
 enum spdk_ssam_iostat_mode {
 	SSAM_IOSTAT_NORMAL,
 	SSAM_IOSTAT_SUM,
