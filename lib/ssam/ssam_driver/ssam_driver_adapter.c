@@ -66,6 +66,7 @@ ssam_drv_ops_cb_uninit(void)
 	if (g_ssam_drv_handler != NULL) {
 		memset(&g_ssam_drv_ops, 0, sizeof(struct ssam_drv_ops));
 		dlclose(g_ssam_drv_handler);
+		g_ssam_drv_handler = NULL;
 	}
 }
 
@@ -96,7 +97,13 @@ int
 ssam_drv_ops_init(void)
 {
 	int ret = 0;
-	void *handler = dlopen(SSAM_DRV_SHARD_LIBRARY, RTLD_NOW);
+	void *handler;
+
+	if (g_ssam_drv_handler != NULL) {
+		return 0;
+	}
+
+	handler = dlopen(SSAM_DRV_SHARD_LIBRARY, RTLD_NOW);
 	if (handler == NULL) {
 		SPDK_ERRLOG("%s load err %s\n", SSAM_DRV_SHARD_LIBRARY, dlerror());
 		return -1;

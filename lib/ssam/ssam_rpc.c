@@ -440,6 +440,11 @@ rpc_ssam_delete_controller(struct spdk_jsonrpc_request *request,
 	delete_dev_times[gfunc_id] = 0;
 
 	smdev = ssam_dev_next(NULL);
+	if (smdev == NULL) {
+		rc = -EINVAL;
+		ssam_unlock();
+		goto invalid;
+	}
 	if (smdev->type == VIRTIO_TYPE_BLK) {
 		while (smdev != NULL) {
 			smsession = smdev->smsessions[gfunc_id];
@@ -921,7 +926,7 @@ rpc_ssam_show_iostat(struct spdk_jsonrpc_request *request, struct rpc_ssam_show_
 				smsession = ssam_sessions_next(smdev->smsessions, smsession);
 				continue;
 			}
-			if (smsession->backend->show_iostat_json != NULL) {
+			if (smsession->backend != NULL && smsession->backend->show_iostat_json != NULL) {
 				smsession->backend->show_iostat_json(smsession, &iostat_args, w);
 			}
 			smsession = ssam_sessions_next(smdev->smsessions, smsession);
@@ -1128,7 +1133,7 @@ rpc_ssam_clear_iostat(void)
 	while (smdev != NULL) {
 		smsession = ssam_sessions_next(smdev->smsessions, NULL);
 		while (smsession != NULL) {
-			if (smsession->backend->clear_iostat_json != NULL) {
+			if (smsession->backend != NULL && smsession->backend->clear_iostat_json != NULL) {
 				smsession->backend->clear_iostat_json(smsession);
 			}
 			smsession = ssam_sessions_next(smdev->smsessions, smsession);
@@ -1168,6 +1173,11 @@ ssam_bdev_resize(struct spdk_bdev *bdev, uint64_t new_size_in_mb)
 
 	if (bdev->blocklen == 0) {
 		SPDK_ERRLOG("The blocklen of bdev %s is zero\n", bdev_name);
+		return -EINVAL;
+	}
+
+	if (bdev->blockcnt == 0) {
+		SPDK_ERRLOG("The blockcnt of bdev %s is zero\n", bdev_name);
 		return -EINVAL;
 	}
 
@@ -1331,7 +1341,7 @@ rpc_ssam_scsi_bdev_resize(struct spdk_jsonrpc_request *request,
 		goto invalid;
 	}
 
-	if (smsession->backend->get_bdev != NULL) {
+	if (smsession->backend != NULL && smsession->backend->get_bdev != NULL) {
 		bdev = smsession->backend->get_bdev(smsession, req.tgt_id);
 	}
 	if (bdev == NULL) {
@@ -1407,6 +1417,10 @@ rpc_ssam_bdev_aio_resize(struct spdk_jsonrpc_request *request,
 			rc = -EINVAL;
 			goto invalid;
 		}
+	} else {
+		SPDK_ERRLOG("req name is null\n");
+		rc = -EINVAL;
+		goto invalid;
 	}
 
 	rc = ssam_bdev_resize(bdev, req.new_size_in_mb);
@@ -1885,7 +1899,7 @@ rpc_ssam_scsi_device_iostat(struct spdk_jsonrpc_request *request,
 		goto invalid;
 	}
 
-	if (req.scsi_tgt_num < 0 || req.scsi_tgt_num > SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+	if (req.scsi_tgt_num < 0 || req.scsi_tgt_num >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
 		SPDK_ERRLOG("scsi_tgt_num is out of range\n");
 		rc = -EINVAL;
 		goto invalid;
