@@ -326,6 +326,11 @@ ssam_scsi_stat_statistics(struct spdk_ssam_scsi_task *task)
 		return;
 	}
 
+	if (spdk_unlikely(task->tgt_id < 0 || task->tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS)) {
+		SPDK_ERRLOG("tgt_id %u >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS %u.\n",
+				task->tgt_id, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS);
+		return;
+	}
 	int32_t lun_id = spdk_scsi_lun_get_id(task->scsi_task.lun);
 	struct ssam_scsi_stat *scsi_stat =
 			&task->ssmsession->scsi_dev_state[task->tgt_id].io_stat[lun_id]->scsi_stat;
@@ -1749,6 +1754,12 @@ ssam_scsi_process_request(struct spdk_ssam_session *smsession, struct ssam_reque
 	}
 
 	uint32_t index = vq->index[vq->index_r];
+	if (spdk_unlikely(index >= (uint32_t)vq->num)) {
+		SPDK_ERRLOG("%s: vq(%hu) desc_idx %u >= vq_nentries %u.\n",
+				smsession->name, vq_idx, index, vq->num);
+		ssam_scsi_req_complete(smsession->smdev, io_req, VIRTIO_SCSI_S_FAILURE);
+		return;
+	}
 	task = &((struct spdk_ssam_scsi_task *)vq->tasks)[index];
 	if (spdk_unlikely(task->used)) {
 		SPDK_ERRLOG("%s: vq(%hu) task_idx(%hu) is already pending.\n", smsession->name, vq_idx,
@@ -1797,6 +1808,11 @@ ssam_scsi_request_worker(struct spdk_ssam_session *smsession, void *arg)
 		goto err;
 	}
 
+	if (spdk_unlikely(tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS)) {
+		SPDK_ERRLOG("%s: tgt_id %u >= scsi_tgt_num %u.\n",
+				smsession->name, tgt_id, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS);
+		goto err;
+	}
 	if (ssmsession->scsi_dev_state[tgt_id].status != SSAM_SCSI_DEV_PRESENT) {
 		/* If dev has been deleted, return io err */
 		goto err;
@@ -1825,6 +1841,13 @@ ssam_scsi_response_worker(struct spdk_ssam_session *smsession, void *arg)
 		smsession->smdev->discard_io_num++;
 		SPDK_ERRLOG("vq_idx out of range, need less than %u, actually %u\n",
 			    smsession->max_queues, vq_idx);
+		return;
+	}
+
+	if (spdk_unlikely(task_idx >= smsession->queue_size)) {
+		smsession->smdev->discard_io_num++;
+		SPDK_ERRLOG("%s: vq(%u) task_idx %u >= smsession->queue_size %u.\n",
+				smsession->name, vq_idx, task_idx, smsession->queue_size);
 		return;
 	}
 
