@@ -365,6 +365,11 @@ static void ssam_mp_split_block(struct ssam_mp_block *blk, struct ssam_mp_chunk 
 {
 	*free_mem = *allocated;
 	free_mem->size -= size;
+	if (free_mem->size < MP_CK_END_LEN) {
+		SPDK_ERRLOG("split size %lu < MP_CK_END_LEN %lu, cannot split chunk.\n",
+				(unsigned long)free_mem->size, (unsigned long)MP_CK_END_LEN);
+		return;
+	}
 	*(struct ssam_mp_chunk **)((char *)free_mem + free_mem->size - MP_CK_END_LEN) = free_mem;
 
 	if (free_mem->prev == NULL) {

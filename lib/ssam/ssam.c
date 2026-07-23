@@ -372,6 +372,10 @@ static struct spdk_ssam_session *
 ssam_session_find_in_dev(const struct spdk_ssam_dev *smdev,
 			 uint16_t gfunc_id)
 {
+	if (spdk_unlikely(gfunc_id >= SSAM_MAX_SESSION_PER_DEV)) {
+		return NULL;
+	}
+
 	return smdev->smsessions[gfunc_id];
 }
 
@@ -684,6 +688,10 @@ ssam_dev_create_register(struct spdk_ssam_dev *smdev, uint16_t tid)
 
 	rc = ssam_sessions_init(&smdev->smsessions);
 	if (rc != 0) {
+		spdk_thread_destroy(smdev->thread);
+		smdev->thread = NULL;
+		free(smdev->name);
+		smdev->name = NULL;
 		return rc;
 	}
 	TAILQ_INSERT_TAIL(&g_ssam_devices, smdev, tailq);
@@ -800,6 +808,10 @@ ssam_add_session(struct spdk_ssam_session_reg_info *info,
 
 	rc = ssam_sessions_insert(smdev->smsessions, l_stsession);
 	if (rc != 0) {
+		free(l_stsession->name);
+		l_stsession->name = NULL;
+		free(l_stsession);
+		l_stsession = NULL;
 		return rc;
 	}
 	*smsession = l_stsession;
@@ -927,6 +939,11 @@ ssam_dev_forward_req(struct ssam_request *io_req)
 	struct spdk_ssam_dev *smdev = NULL;
 	struct forward_ctx *ctx = NULL;
 	int rc;
+	if (spdk_unlikely(io_req->gfunc_id >= SSAM_MAX_SESSION_PER_DEV)) {
+		SPDK_ERRLOG("gfunc_id %u >= SSAM_MAX_SESSION_PER_DEV %u.\n",
+				io_req->gfunc_id, SSAM_MAX_SESSION_PER_DEV);
+		return false;
+	}
 	ssam_lock();
 	smdev = ssam_dev_next(NULL);
 	while (smdev != NULL) {
@@ -973,7 +990,6 @@ ssam_dev_io_complete(struct spdk_ssam_dev *smdev, struct ssam_request *io_req,
 	struct virtio_scsi_cmd_resp resp = {0};
 	enum ssam_device_type type;
 	uint8_t res_status;
-	int rc;
 	type = ssam_get_virtio_type(io_req->gfunc_id);
 
 	if (success) {
@@ -1084,7 +1100,13 @@ ssam_dev_io_request(struct spdk_ssam_dev *smdev, struct ssam_request *io_req)
 	SPDK_INFOLOG(ssam_blk_data, "handling io tid=%u gfunc_id=%u type=%d rw=%u vqid=%u reqid=%u.\n",
 		     smdev->tid, io_req->gfunc_id, io_req->type, io_req->req.cmd.writable,
 		     io_req->req.cmd.virtio.vq_idx, io_req->req.cmd.virtio.req_idx);
-
+	
+	if (spdk_unlikely(io_req->gfunc_id >= SSAM_MAX_SESSION_PER_DEV)) {
+		SPDK_ERRLOG("%s: gfunc_id %u >= SSAM_MAX_SESSION_PER_DEV %u.\n",
+				smdev->name, io_req->gfunc_id, SSAM_MAX_SESSION_PER_DEV);
+		ssam_dev_io_finish(smdev, io_req, false);
+		return;
+	}
 	smsession = smdev->smsessions[io_req->gfunc_id];
 	if (smsession == NULL || smsession->started == false) {
 		if (!ssam_dev_forward_req(io_req)) {
@@ -1170,6 +1192,12 @@ ssam_dev_io_response(struct spdk_ssam_dev *smdev, const struct ssam_dma_rsp *dma
 		     smdev->tid, dma_cb->gfunc_id, dma_cb->req_dir,
 		     dma_cb->vq_idx, dma_cb->task_idx, dma_cb->status);
 
+	if (spdk_unlikely(dma_cb->gfunc_id >= SSAM_MAX_SESSION_PER_DEV)) {
+		smdev->discard_io_num++;
+		SPDK_ERRLOG("%s: gfunc_id %u >= SSAM_MAX_SESSION_PER_DEV %u.\n",
+				smdev->name, dma_cb->gfunc_id, SSAM_MAX_SESSION_PER_DEV);
+		return;
+	}
 	smsession = smdev->smsessions[dma_cb->gfunc_id];
 	if (smsession == NULL) {
 		smdev->discard_io_num++;

@@ -1305,6 +1305,11 @@ ssam_process_blk_request(struct spdk_ssam_blk_task *task)
 
 	io_cmd = &task->io_req->req.cmd;
 	/* get req header */
+	if (spdk_unlikely(io_cmd->iovcnt == 0)) {
+		SPDK_ERRLOG("iovcnt is 0 (req_idx = %"PRIu16").\n", get_req_idx(task));
+		ssam_task_complete(task, VIRTIO_BLK_S_IOERR);
+		return -1;
+	}
 	if (spdk_unlikely(io_cmd->iovs[0].iov_len != sizeof(*req))) {
 		SPDK_ERRLOG("First descriptor size is %zu but expected %zu (req_idx = %"PRIu16").\n",
 			    io_cmd->iovs[0].iov_len, sizeof(*req), get_req_idx(task));
@@ -1338,6 +1343,10 @@ ssam_get_payload_size(struct ssam_request *io_req, uint32_t *payload_size)
 	uint32_t payload = 0;
 	uint32_t i;
 
+	if (spdk_unlikely(io_cmd->iovcnt == 0)) {
+		SPDK_ERRLOG("iovcnt is 0\n");
+		return -1;
+	}
 	for (i = 1; i < io_cmd->iovcnt - 1; i++) {
 		if (spdk_unlikely((UINT32_MAX - io_cmd->iovs[i].iov_len) < payload)) {
 			SPDK_ERRLOG("payload size overflow\n");
@@ -1495,48 +1504,19 @@ ssam_process_blk_task(struct spdk_ssam_session *smsession, struct ssam_request *
 	if (spdk_unlikely(vq->use_num >= vq->num)) {
 		SPDK_ERRLOG("Session:%s vq(%hu) task_cnt(%u) limit(%u).\n", smsession->name, vq_idx, vq->use_num,
 			    vq->num);
-		rc = ssam_blk_io_complete(smsession->smdev, io_req, VIRTIO_BLK_S_IOERR);
-		if (rc != 0) {
-			struct spdk_ssam_session_io_wait_r *io_wait_r =
-				calloc(1, sizeof(struct spdk_ssam_session_io_wait_r));
-			struct ssam_blk_io_complete_arg *cb_arg =
-				calloc(1, sizeof(struct ssam_blk_io_complete_arg));
-			if (io_wait_r == NULL || cb_arg == NULL) {
-				SPDK_ERRLOG("calloc for io_wait_r failed\n");
-				sleep(1);
-				raise(SIGTERM);
-			}
-			cb_arg->smdev = smsession->smdev;
-			cb_arg->io_req = io_req;
-			io_wait_r->cb_fn = ssam_blk_io_complete_cb;
-			io_wait_r->cb_arg = cb_arg;
-			ssam_session_insert_io_wait_r(smsession->smdev, io_wait_r);
-		}
-		return;
+		goto blk_task_err;
 	}
 
 	uint32_t index = vq->index[vq->index_r];
+	if (spdk_unlikely(index >= (uint32_t)vq->num)) {
+		SPDK_ERRLOG("%s: vq(%u) desc_idx %u >= vq_nentries %u.\n",
+				smsession->name, vq_idx, index, vq->num);
+		goto blk_task_err;
+	}
 	task = &((struct spdk_ssam_blk_task *)vq->tasks)[index];
 	if (spdk_unlikely(task->used)) {
 		SPDK_ERRLOG("%s: vq(%u) task with idx %u is already pending.\n", smsession->name, vq_idx, index);
-		rc = ssam_blk_io_complete(smsession->smdev, io_req, VIRTIO_BLK_S_IOERR);
-		if (rc != 0) {
-			struct spdk_ssam_session_io_wait_r *io_wait_r =
-				calloc(1, sizeof(struct spdk_ssam_session_io_wait_r));
-			struct ssam_blk_io_complete_arg *cb_arg =
-				calloc(1, sizeof(struct ssam_blk_io_complete_arg));
-			if (io_wait_r == NULL || cb_arg == NULL) {
-				SPDK_ERRLOG("calloc for io_wait_r failed\n");
-				sleep(1);
-				raise(SIGTERM);
-			}
-			cb_arg->smdev = smsession->smdev;
-			cb_arg->io_req = io_req;
-			io_wait_r->cb_fn = ssam_blk_io_complete_cb;
-			io_wait_r->cb_arg = cb_arg;
-			ssam_session_insert_io_wait_r(smsession->smdev, io_wait_r);
-		}
-		return;
+		goto blk_task_err;
 	}
 
 	smsession->task_cnt++;
@@ -1558,6 +1538,32 @@ ssam_process_blk_task(struct spdk_ssam_session *smsession, struct ssam_request *
 	}
 
 	ssam_request_dma_process(smsession, task);
+	return;
+
+blk_task_err:
+	rc = ssam_blk_io_complete(smsession->smdev, io_req, VIRTIO_BLK_S_IOERR);
+	if (rc != 0) {
+		struct spdk_ssam_session_io_wait_r *io_wait_r =
+			calloc(1, sizeof(struct spdk_ssam_session_io_wait_r));
+		struct ssam_blk_io_complete_arg *cb_arg =
+			calloc(1, sizeof(struct ssam_blk_io_complete_arg));
+		if (io_wait_r == NULL || cb_arg == NULL) {
+			SPDK_ERRLOG("calloc for io_wait_r failed\n");
+			if (io_wait_r != NULL) {
+				free(io_wait_r);
+			}
+			if (cb_arg != NULL) {
+				free(cb_arg);
+			}
+			sleep(1);
+			raise(SIGTERM);
+		}
+		cb_arg->smdev = smsession->smdev;
+		cb_arg->io_req = io_req;
+		io_wait_r->cb_fn = ssam_blk_io_complete_cb;
+		io_wait_r->cb_arg = cb_arg;
+		ssam_session_insert_io_wait_r(smsession->smdev, io_wait_r);
+	}
 	return;
 }
 
@@ -1693,6 +1699,12 @@ ssam_blk_response_worker(struct spdk_ssam_session *smsession, void *arg)
 		return;
 	}
 
+	if (spdk_unlikely(task_idx >= smsession->queue_size)) {
+		smsession->smdev->discard_io_num++;
+		SPDK_ERRLOG("%s: vq(%u) task_idx %u >= smsession->queue_size %u.\n",
+				smsession->name, vq_idx, task_idx, smsession->queue_size);
+		return;
+	}
 	task = &((struct spdk_ssam_blk_task *)smsession->virtqueue[vq_idx].tasks)[task_idx];
 	if (dma_rsp->status != 0) {
 		ssam_task_complete(task, VIRTIO_BLK_S_IOERR);
@@ -2115,6 +2127,16 @@ ssam_blk_construct(struct spdk_ssam_session_reg_info *info, const char *dev_name
 out:
 	if ((ret != 0) && (smsession != NULL) && (smsession->smdev != NULL)) {
 		ssam_session_unreg_response_cb(smsession);
+		if (bsmsession != NULL) {
+			if (bsmsession->bdev_desc != NULL) {
+				spdk_bdev_close(bsmsession->bdev_desc);
+				bsmsession->bdev_desc = NULL;
+			}
+			if (bsmsession->serial != NULL) {
+				free(bsmsession->serial);
+				bsmsession->serial = NULL;
+			}
+		}
 		rc = ssam_session_unregister(smsession);
 		if (rc != 0) {
 			SPDK_ERRLOG("function id %d: blk construct failed and session remove failed, ret=%d\n",
