@@ -1625,10 +1625,10 @@ ssam_virtio_get_id_process(struct spdk_ssam_blk_task *task)
 	used_length = spdk_min((size_t)VIRTIO_BLK_ID_BYTES, task->iovs.virt.sges[0].iov_len);
 	if (bsmsession->serial == NULL) {
 		spdk_strcpy_pad(task->iovs.virt.sges[0].iov_base, spdk_bdev_get_product_name(bsmsession->bdev),
-				used_length, ' ');
+				used_length, '\0');
 	} else {
 		spdk_strcpy_pad(task->iovs.virt.sges[0].iov_base, bsmsession->serial,
-				used_length, ' ');
+				used_length, '\0');
 	}
 	bsmsession->blk_stat.bdev_complete_count++;
 	bsmsession->vq_blk_stat[task->vq_idx].bdev_complete_count++;
