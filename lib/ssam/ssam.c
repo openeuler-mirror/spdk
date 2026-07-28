@@ -597,6 +597,10 @@ ssam_dev_create_register(struct spdk_ssam_dev *smdev, uint16_t tid)
 
 	rc = ssam_sessions_init(&smdev->smsessions);
 	if (rc != 0) {
+		spdk_thread_destroy(smdev->thread);
+		smdev->thread = NULL;
+		free(smdev->name);
+		smdev->name = NULL;
 		return rc;
 	}
 	TAILQ_INSERT_TAIL(&g_ssam_devices, smdev, tailq);
@@ -702,13 +706,15 @@ ssam_add_session(struct spdk_ssam_session_reg_info *info,
 
 	rc = ssam_init_session_fields(info, smdev, l_stsession);
 	if (rc != 0) {
+		free(l_stsession->name);
 		free(l_stsession);
-		l_stsession = NULL;
 		return rc;
 	}
 
 	rc = ssam_sessions_insert(smdev->smsessions, l_stsession);
 	if (rc != 0) {
+		free(l_stsession->name);
+		free(l_stsession);
 		return rc;
 	}
 	*smsession = l_stsession;

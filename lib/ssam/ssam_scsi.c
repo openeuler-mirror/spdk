@@ -865,24 +865,46 @@ ssam_scsi_iostat_construct(struct spdk_ssam_scsi_session *ssmsession, int32_t tg
 	struct spdk_scsi_dev_io_state *io_stat;
 	int32_t lun_id;
 	int i;
+	int rc = 0;
+
+	if (tgt_id < 0 || tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+		SPDK_ERRLOG("Invalid tgt_id %d, must be in [0, %d)\n", tgt_id, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS);
+		return -EINVAL;
+	}
 
 	for (i = 0; i < num_luns; i++) {
 		lun_id = lun_id_list[i];
+		if (lun_id < 0 || lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+			SPDK_ERRLOG("Invalid lun_id %d, must be in [0, %d)\n", lun_id, SSAM_SPDK_SCSI_DEV_MAX_LUN);
+		    rc = -EINVAL;
+			goto cleanup;
+		}
 		io_stat = ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id];
 		if (io_stat != NULL) {
 			SPDK_ERRLOG("io_stat with tgt %d lun %d already exist\n", tgt_id, lun_id);
-			return -EEXIST;
+			rc = -EEXIST;
+			goto cleanup;
 		}
 
 		io_stat = calloc(1, sizeof(*io_stat));
 		if (io_stat == NULL) {
 			SPDK_ERRLOG("Could not allocate io_stat for tgt %d lun %d\n", tgt_id, lun_id);
-			return -ENOMEM;
+			rc = -ENOMEM;
+			goto cleanup;
 		}
 		ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id] = io_stat;
 	}
 
 	return 0;
+
+cleanup:
+	while (i > 0) {
+		i--;
+		lun_id = lun_id_list[i];
+		free(ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id]);
+		ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id] = NULL;
+	}
+	return rc;
 }
 
 static void
@@ -1786,6 +1808,10 @@ ssam_scsi_request_worker(struct spdk_ssam_session *smsession, void *arg)
 	uint32_t tgt_id = req->lun[1];
 
 	smdev->io_num++;
+	if (tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+		SPDK_ERRLOG("tgt_id %u out of range, max is %u\n", tgt_id, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS);
+		goto err;
+	}
 
 	if (vq_idx >= smsession->max_queues) {
 		SPDK_ERRLOG("vq_idx out of range, need less than %u, actually %u\n",
@@ -2063,7 +2089,9 @@ ssam_scsi_construct(struct spdk_ssam_session_reg_info *info)
 	rc = ssam_scsi_session_connect(smsession, info->queues);
 	if (rc != 0) {
 		ssam_session_unreg_response_cb(smsession);
-		ssam_session_unregister(smsession, false);
+		if (ssam_session_unregister(smsession, false) != 0) {
+			free(ssmsession->dbdf);
+		}
 		ssam_unlock();
 		return -EINVAL;
 	}
@@ -2491,6 +2519,7 @@ ssam_scsi_dev_remove_tgt(struct spdk_ssam_session *smsession, unsigned scsi_tgt_
 		.need_async = false,
 		.need_rsp = true,
 	};
+	int rc;
 
 	if (scsi_tgt_num >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
 		SPDK_ERRLOG("%s: invalid SCSI target number %d\n", smsession->name, scsi_tgt_num);
@@ -2511,8 +2540,13 @@ ssam_scsi_dev_remove_tgt(struct spdk_ssam_session *smsession, unsigned scsi_tgt_
 
 	ctx->scsi_tgt_num = scsi_tgt_num;
 
-	ssam_send_event_to_session(smsession, ssam_scsi_session_remove_tgt,
-				   ssam_scsi_session_remove_tgt_cpl, send_event_flag, ctx);
+	rc = ssam_send_event_to_session(smsession, ssam_scsi_session_remove_tgt,
+				ssam_scsi_session_remove_tgt_cpl, send_event_flag, ctx);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to send remove tgt event, rc=%d\n", smsession->name, rc);
+		free(ctx);
+		return rc;
+	}
 
 	return 0;
 }
