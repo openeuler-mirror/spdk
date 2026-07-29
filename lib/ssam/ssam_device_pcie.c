@@ -123,6 +123,9 @@ ssam_init_device_pcie_list_by_values(struct spdk_json_val *values, size_t num_va
 
 		/* point to val */
 		i++;
+		if (i >= num_values) {
+            break;
+        }
 
 		if (strcmp(key, "index") == 0) {
 			ssam_set_device_pcie_index(&values[i], cur_index);

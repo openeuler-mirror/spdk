@@ -233,6 +233,12 @@ ssam_scsi_stat_statistics(struct spdk_ssam_scsi_task *task)
 	}
 
 	int32_t lun_id = spdk_scsi_lun_get_id(task->scsi_task.lun);
+	if (lun_id < 0 || lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+		return;
+	}
+	if (task->tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+		return;
+	}
 	struct ssam_scsi_stat *scsi_stat =
 			&task->ssmsession->scsi_dev_state[task->tgt_id].io_stat[lun_id]->scsi_stat;
 
@@ -773,6 +779,10 @@ ssam_scsi_iostat_construct(struct spdk_ssam_scsi_session *ssmsession, int32_t tg
 
 	for (i = 0; i < num_luns; i++) {
 		lun_id = lun_id_list[i];
+		if (lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+			SPDK_ERRLOG("lun id %d is out of range.\n", lun_id);
+			return -EINVAL;
+		}
 		io_stat = ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id];
 		if (io_stat != NULL) {
 			SPDK_ERRLOG("io_stat with tgt %d lun %d already exist\n", tgt_id, lun_id);
@@ -808,6 +818,10 @@ ssam_scsi_iostat_destruct(struct spdk_scsi_dev_ssam_state *state)
 static void
 ssam_remove_scsi_tgt(struct spdk_ssam_scsi_session *ssmsession, unsigned scsi_tgt_num)
 {
+	if (scsi_tgt_num >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+		SPDK_ERRLOG("scsi tgt num %u is out of range\n", scsi_tgt_num);
+		return;
+	}
 	struct spdk_scsi_dev_ssam_state *state = &ssmsession->scsi_dev_state[scsi_tgt_num];
 	struct spdk_ssam_session *smsession = &ssmsession->smsession;
 	spdk_ssam_session_rsp_fn rsp_fn = smsession->rsp_fn;
@@ -851,9 +865,17 @@ ssam_scsi_get_payload_size(struct ssam_request *io_req, uint32_t *payload_size)
 
 	if (io_cmd->writable) { /* read io */
 		/* FROM_DEV: [req][resp][write_buf]...[write_buf ]*, write_buf start at index 2 */
+		if (io_cmd->iovcnt < 2) {
+			SPDK_ERRLOG("Invalid iovcnt %u for read io\n", io_cmd->iovcnt);
+			return -1;
+		}
 		first_vec = 2;
 		end_vec = io_cmd->iovcnt - 1;
 	} else { /* write io */
+		if (io_cmd->iovcnt < 2) {
+			SPDK_ERRLOG("Invalid iovcnt %u for write io\n", io_cmd->iovcnt);
+			return -1;
+		}
 		first_vec = 1;
 		/* TO_DEV: [req][read_buf]...[read_buf][resp], read_buf last index is iovnt-2 */
 		end_vec = io_cmd->iovcnt - 2;
@@ -928,6 +950,10 @@ ssam_scsi_task_dma_request_para(struct ssam_dma_request *data_request,
 	data_request->direction = type;
 	data_request->data_len = scsi_task->transfer_len;
 	if (type == SSAM_REQUEST_DATA_STORE) {
+		if (io_cmd->iovcnt < 3) {
+			SPDK_ERRLOG("Invalid iovcnt %u for store request\n", io_cmd->iovcnt);
+			return;
+		}
 		data_request->src = task->iovs.phys.sges;
 		data_request->src_num = task->iovcnt;
 		/* FROM_DEV: [req][resp][write_buf]...[write_buf ]*, write_buf start at index 2 */
@@ -935,6 +961,10 @@ ssam_scsi_task_dma_request_para(struct ssam_dma_request *data_request,
 		/* dma data iovs does not contain header and tail */
 		data_request->dst_num = io_cmd->iovcnt - IOV_HEADER_TAIL_NUM;
 	} else if (type == SSAM_REQUEST_DATA_LOAD) {
+		if (io_cmd->iovcnt < 2) {
+			SPDK_ERRLOG("Invalid iovcnt %u for load request\n", io_cmd->iovcnt);
+			return;
+		}
 		data_request->src = &io_cmd->iovs[1];
 		/* dma data iovs does not contain header and tail */
 		data_request->src_num = io_cmd->iovcnt - IOV_HEADER_TAIL_NUM;
@@ -991,9 +1021,17 @@ ssam_scsi_io_complete(struct spdk_ssam_dev *smdev, struct ssam_request *io_req, 
 	virtio_res = (struct ssam_virtio_res *)&io_resp.data;
 	virtio_res->iovs = &io_vec;
 	if (io_cmd->writable) { /* FROM_DEV: [req][resp][write_buf]...[write_buf ] */
+		if (io_cmd->iovcnt < 2) {
+			SPDK_ERRLOG("Invalid iovcnt %u for write request\n", io_cmd->iovcnt);
+			return -1;
+		}
 		virtio_res->iovs->iov_base = io_cmd->iovs[1].iov_base;
 		virtio_res->iovs->iov_len = io_cmd->iovs[1].iov_len;
 	} else {    /* TO_DEV: [req][read_buf]...[read_buf][resp] */
+		if (io_cmd->iovcnt < 2) {
+			SPDK_ERRLOG("Invalid iovcnt %u for read request\n", io_cmd->iovcnt);
+			return -1;
+		}
 		virtio_res->iovs->iov_base = io_cmd->iovs[io_cmd->iovcnt - 1].iov_base;
 		virtio_res->iovs->iov_len = io_cmd->iovs[io_cmd->iovcnt - 1].iov_len;
 	}
@@ -1296,6 +1334,9 @@ ssam_scsi_read_task_cpl_cb(struct spdk_scsi_task *scsi_task)
 					   scsi_task);
 	int32_t tgt_id = task->tgt_id;
 	int32_t lun_id = spdk_scsi_lun_get_id(scsi_task->lun);
+	if (lun_id < 0 || lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+		return;
+	}
 	struct spdk_scsi_dev_io_state *io_stat = task->ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id];
 
 	/* Second part start of read */
@@ -1335,6 +1376,9 @@ ssam_scsi_write_task_cpl_cb(struct spdk_scsi_task *scsi_task)
 					   scsi_task);
 	int32_t tgt_id = task->tgt_id;
 	int32_t lun_id = spdk_scsi_lun_get_id(scsi_task->lun);
+	if (lun_id < 0 || lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+		return;
+	}
 	struct spdk_scsi_dev_io_state *io_stat = task->ssmsession->scsi_dev_state[tgt_id].io_stat[lun_id];
 	uint32_t payload_size = task->scsi_task.transfer_len;
 
@@ -1581,6 +1625,11 @@ ssam_scsi_process_io_task(struct spdk_ssam_session *smsession, struct spdk_ssam_
 	}
 
 	lun_id = spdk_scsi_lun_get_id(task->scsi_task.lun);
+	if (lun_id < 0 || lun_id >= SSAM_SPDK_SCSI_DEV_MAX_LUN) {
+		task->resp.response = VIRTIO_SCSI_S_FAILURE;
+		ssam_scsi_submit_completion(task);
+		return;
+	}
 	io_stat = ssmsession->scsi_dev_state[task->tgt_id].io_stat[lun_id];
 	if (io_stat == NULL) {
 		SPDK_ERRLOG("No io_stat with tgt %d lun %d\n", task->tgt_id, lun_id);
@@ -1700,6 +1749,12 @@ ssam_scsi_request_worker(struct spdk_ssam_session *smsession, void *arg)
 	if (io_req->status != SSAM_IO_STATUS_OK) {
 		SPDK_WARNLOG("%s: ssam request status invalid, but still process, status=%d\n",
 			     smsession->name, io_req->status);
+		goto err;
+	}
+
+	if (tgt_id >= SPDK_SSAM_SCSI_CTRLR_MAX_DEVS) {
+		SPDK_ERRLOG("%s: tgt_id %u out of range, max %u\n",
+                ssmsession->smsession.name, tgt_id, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS);
 		goto err;
 	}
 

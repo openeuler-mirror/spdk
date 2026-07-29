@@ -52,6 +52,7 @@ main(int argc, char *argv[])
 	} else {
 		spdk_ssam_set_shm_created(true);
 		SPDK_NOTICELOG("ssam share memory has been created.\n");
+		close(shm_id);
 	}
 
 	rc = spdk_ssam_rc_preinit();

@@ -107,6 +107,11 @@ ssam_sessions_insert(struct spdk_ssam_session **smsessions, struct spdk_ssam_ses
 {
 	uint16_t i = smsession->gfunc_id;
 
+	if (i >= SSAM_MAX_SESSION_PER_DEV) {
+		SPDK_ERRLOG("smsession gfunc id %u is out of range.\n", i);
+		return -1;
+	}
+
 	if (smsessions[i] != NULL) {
 		SPDK_ERRLOG("smsessions already have such sesseion\n");
 		return -ENOSPC;
@@ -301,6 +306,9 @@ static struct spdk_ssam_session *
 ssam_session_find_in_dev(const struct spdk_ssam_dev *smdev,
 			 uint16_t gfunc_id)
 {
+	if (gfunc_id >= SSAM_MAX_SESSION_PER_DEV) {
+		return NULL;
+	}
 	return smdev->smsessions[gfunc_id];
 }
 
@@ -581,6 +589,10 @@ ssam_dev_create_register(struct spdk_ssam_dev *smdev, uint16_t tid)
 
 	rc = ssam_sessions_init(&smdev->smsessions);
 	if (rc != 0) {
+		spdk_thread_destroy(smdev->thread);
+		smdev->thread = NULL;
+		free(smdev->name);
+		smdev->name = NULL;
 		return rc;
 	}
 	TAILQ_INSERT_TAIL(&g_ssam_devices, smdev, tailq);
@@ -693,6 +705,10 @@ ssam_add_session(struct spdk_ssam_session_reg_info *info,
 
 	rc = ssam_sessions_insert(smdev->smsessions, l_stsession);
 	if (rc != 0) {
+		free(l_stsession->name);
+		l_stsession->name = NULL;
+		free(l_stsession);
+		l_stsession = NULL;
 		return rc;
 	}
 	*smsession = l_stsession;
@@ -815,6 +831,10 @@ ssam_dev_forward_req(struct ssam_request *io_req)
 	struct spdk_ssam_dev *smdev = NULL;
 	struct forward_ctx *ctx = NULL;
 	int rc;
+	if (io_req->gfunc_id >= SSAM_MAX_SESSION_PER_DEV) {
+		SPDK_ERRLOG("gfunc_id %u is out of range.\n", io_req->gfunc_id);
+		return false;
+	}
 	ssam_lock();
 	smdev = ssam_dev_next(NULL);
 	while (smdev != NULL) {
@@ -971,6 +991,12 @@ ssam_dev_io_request(struct spdk_ssam_dev *smdev, struct ssam_request *io_req)
 		     smdev->tid, io_req->gfunc_id, io_req->type, io_req->req.cmd.writable,
 		     io_req->req.cmd.virtio.vq_idx, io_req->req.cmd.virtio.req_idx);
 
+    if (io_req->gfunc_id >= SSAM_MAX_SESSION_PER_DEV) {
+		SPDK_ERRLOG("%s: gfunc_id %u is out of range.\n", smdev->name, io_req->gfunc_id);
+		ssam_dev_io_finish(smdev, io_req, false);
+		return;
+	}
+	
 	smsession = smdev->smsessions[io_req->gfunc_id];
 	if (smsession == NULL || smsession->started == false) {
 		if (!ssam_dev_forward_req(io_req)) {
@@ -1059,6 +1085,12 @@ ssam_dev_io_response(struct spdk_ssam_dev *smdev, const struct ssam_dma_rsp *dma
 		     smdev->tid, dma_cb->gfunc_id, dma_cb->req_dir,
 		     dma_cb->vq_idx, dma_cb->task_idx, dma_cb->status);
 
+	if (dma_cb->gfunc_id >= SSAM_MAX_SESSION_PER_DEV) {
+		smdev->discard_io_num++;
+		SPDK_ERRLOG("gfunc_id %u is out of range.\n", dma_cb->gfunc_id);
+		return;
+	}
+	
 	smsession = smdev->smsessions[dma_cb->gfunc_id];
 	if (smsession == NULL) {
 		smdev->discard_io_num++;
@@ -1371,6 +1403,11 @@ ssam_send_event_to_session(struct spdk_ssam_session *smsession, spdk_ssam_sessio
 {
 	struct ssam_session_fn_ctx *ev_ctx;
 	int rc;
+
+	if(smsession == NULL) {
+		SPDK_ERRLOG("While send event to smsession, smession is null.\n");
+		return -1;
+	}
 
 	ev_ctx = calloc(1, sizeof(*ev_ctx));
 	if (ev_ctx == NULL) {

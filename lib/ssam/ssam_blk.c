@@ -236,6 +236,11 @@ ssam_blk_stop_cpl_cb(struct spdk_ssam_session *smsession, void **ctx)
 	spdk_ssam_session_rsp_fn rsp_fn = smsession->rsp_fn;
 	void *rsp_ctx = smsession->rsp_ctx;
 	int rc;
+
+	if (smsession->gfunc_id >= 2000) {
+		return;
+	}
+	
 	delete_dev_times[smsession->gfunc_id]++;
 
 	ssam_dev_bdev_remove_cpl_cb(smsession, NULL);
@@ -603,6 +608,9 @@ ssam_blk_show_iostat_json(struct spdk_ssam_session *smsession,
 			memcpy(&stat, &bsmsession->stat, sizeof(struct spdk_bdev_io_stat));
 			memcpy(&blk_stat, &bsmsession->blk_stat, sizeof(struct ssam_blk_stat));
 		} else {
+			if (args->id >= SPDK_SSAM_MAX_VQUEUES) {
+				return;
+			}
 			memcpy(&stat, &bsmsession->vq_stat[args->id], sizeof(struct spdk_bdev_io_stat));
 			memcpy(&blk_stat, &bsmsession->vq_blk_stat[args->id], sizeof(struct ssam_blk_stat));
 		}
@@ -628,6 +636,9 @@ ssam_blk_show_iostat_json(struct spdk_ssam_session *smsession,
 			memcpy(&stat, &bsmsession->stat, sizeof(struct spdk_bdev_io_stat));
 			memcpy(&blk_stat, &bsmsession->blk_stat, sizeof(struct ssam_blk_stat));
 		} else {
+			if (args->id >= SPDK_SSAM_MAX_VQUEUES) {
+				return;
+			}
 			memcpy(&stat, &bsmsession->vq_stat[args->id], sizeof(struct spdk_bdev_io_stat));
 			memcpy(&blk_stat, &bsmsession->vq_blk_stat[args->id], sizeof(struct ssam_blk_stat));
 		}
