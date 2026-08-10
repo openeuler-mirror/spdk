@@ -77,6 +77,11 @@ spdk_app_get_shm_id(void)
 	return g_spdk_app.shm_id;
 }
 
+bool spdk_get_shutdown_sig_received(void)
+{
+	return g_shutdown_sig_received;
+}
+
 /* append one empty option to indicate the end of the array */
 static const struct option g_cmdline_options[] = {
 #define CONFIG_FILE_OPT_IDX	'c'

@@ -29,6 +29,7 @@ from . import nvmf
 from . import subsystem
 from . import trace
 from . import vhost
+from . import ssam
 from . import vmd
 from . import sock
 from . import vfio_user

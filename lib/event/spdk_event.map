@@ -16,6 +16,7 @@
 	spdk_event_call;
 	spdk_framework_enable_context_switch_monitor;
 	spdk_framework_context_switch_monitor_enabled;
+	spdk_get_shutdown_sig_received;
 
 	# Public scheduler functions
 	spdk_scheduler_set;

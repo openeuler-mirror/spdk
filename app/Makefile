@@ -13,6 +13,7 @@ DIRS-y += nvmf_tgt
 DIRS-y += iscsi_tgt
 DIRS-y += spdk_tgt
 DIRS-y += spdk_lspci
+DIRS-y += ssam
 DIRS-y += spdk_nvme_perf
 DIRS-y += spdk_nvme_identify
 DIRS-y += spdk_nvme_discover
