@@ -1,24 +1,21 @@
-From 7ed7410518f42600e6e738dcee9830ea6d819901 Mon Sep 17 00:00:00 2001
+From 9f04d77ed8bd1b5dff2382f51cf200cd05665f5a Mon Sep 17 00:00:00 2001
 From: liuziming1224 <liuziming7@huawei.com>
-Date: Thu, 13 Aug 2026 13:37:21 +0800
-Subject: [PATCH] spdk21.01 patch
+Date: Mon, 10 Aug 2026 19:57:25 +0800
+Subject: [PATCH] spdk25.09 patch
 
 ---
- CONFIG                                     |    5 +-
- LICENSE                                    |    7 +-
+ CONFIG                                     |    3 +
  app/Makefile                               |    1 +
  app/ssam/Makefile                          |   31 +
  app/ssam/ssam.c                            |   60 +
- configure                                  |   17 +
+ configure                                  |   18 +
  include/spdk/event.h                       |    2 +
- include/spdk/json.h                        |    2 +
  include/spdk/ssam.h                        |  239 ++
  lib/Makefile                               |    1 +
  lib/bdev/bdev.c                            |   16 +
  lib/event/app.c                            |    5 +
- lib/event/json_config.c                    |    9 +
  lib/event/spdk_event.map                   |    1 +
- lib/json/json_write.c                      |   20 +
+ lib/init/json_config.c                     |    9 +
  lib/scsi/lun.c                             |   12 +
  lib/ssam/Makefile                          |   26 +
  lib/ssam/spdk_ssam.map                     |   16 +
@@ -42,12 +39,11 @@ Subject: [PATCH] spdk21.01 patch
  module/bdev/iscsi/bdev_iscsi.c             |   92 +-
  module/event/subsystems/Makefile           |    2 +
  module/event/subsystems/ssam/Makefile      |   17 +
- module/event/subsystems/ssam/ssam.c        |   45 +
- scripts/hw_dpu_rpc.py                      |  277 +++
- scripts/rpc/__init__.py                    |    1 +
- scripts/rpc/ssam.py                        |  259 ++
- test/unit/lib/json_mock.c                  |    3 +
- 43 files changed, 14193 insertions(+), 3 deletions(-)
+ module/event/subsystems/ssam/ssam.c        |   46 +
+ python/spdk/rpc/__init__.py                |    1 +
+ python/spdk/rpc/ssam.py                    |  259 ++
+ scripts/hw_dpu_rpc.py                      |  285 +++
+ 39 files changed, 14171 insertions(+), 1 deletion(-)
  create mode 100644 app/ssam/Makefile
  create mode 100644 app/ssam/ssam.c
  create mode 100644 include/spdk/ssam.h
@@ -71,23 +67,14 @@ Subject: [PATCH] spdk21.01 patch
  create mode 100644 lib/ssam/ssam_scsi.c
  create mode 100644 module/event/subsystems/ssam/Makefile
  create mode 100644 module/event/subsystems/ssam/ssam.c
+ create mode 100644 python/spdk/rpc/ssam.py
  create mode 100644 scripts/hw_dpu_rpc.py
- create mode 100644 scripts/rpc/ssam.py
 
 diff --git a/CONFIG b/CONFIG
-index b5fffae55..5c4b91318 100644
+index db4fcab28..acca06883 100644
 --- a/CONFIG
 +++ b/CONFIG
-@@ -74,7 +74,7 @@ CONFIG_TESTS=y
- CONFIG_UNIT_TESTS=y
- 
- # Build examples
--CONFIG_EXAMPLES=y
-+CONFIG_EXAMPLES=n
- 
- # Build with Control-flow Enforcement Technology (CET)
- CONFIG_CET=n
-@@ -117,6 +117,9 @@ CONFIG_RBD=n
+@@ -122,6 +122,9 @@ CONFIG_UBLK=n
  # Build vhost library.
  CONFIG_VHOST=y
  
@@ -97,33 +84,18 @@ index b5fffae55..5c4b91318 100644
  # Build vhost initiator (Virtio) driver.
  CONFIG_VIRTIO=y
  
-diff --git a/LICENSE b/LICENSE
-index 8e12726c0..228c3aa9f 100644
---- a/LICENSE
-+++ b/LICENSE
-@@ -1,4 +1,9 @@
--BSD LICENSE
-+The SPDK repo contains multiple git submodules each with its own
-+license info.
-+
-+The rest of the SPDK repository uses the Open Source BSD-3-Clause
-+license.  SPDK also uses SPDX Unique License Identifiers to eliminate
-+the need to copy the license text into each individual file.
- 
- Copyright (c) Intel Corporation.
- All rights reserved.
 diff --git a/app/Makefile b/app/Makefile
-index 8ff318ddf..9850d2cfb 100644
+index e4fefe83c..02b2778d6 100644
 --- a/app/Makefile
 +++ b/app/Makefile
-@@ -42,6 +42,7 @@ DIRS-y += iscsi_tgt
+@@ -13,6 +13,7 @@ DIRS-y += nvmf_tgt
+ DIRS-y += iscsi_tgt
  DIRS-y += spdk_tgt
  DIRS-y += spdk_lspci
- DIRS-y += spdk_top
 +DIRS-y += ssam
- ifeq ($(OS),Linux)
- DIRS-$(CONFIG_VHOST) += vhost
- DIRS-y += spdk_dd
+ DIRS-y += spdk_nvme_perf
+ DIRS-y += spdk_nvme_identify
+ DIRS-y += spdk_nvme_discover
 diff --git a/app/ssam/Makefile b/app/ssam/Makefile
 new file mode 100644
 index 000000000..ad69d8262
@@ -228,20 +200,21 @@ index 000000000..2a1655128
 +	return rc;
 +}
 diff --git a/configure b/configure
-index ec61dd73d..a06586d96 100755
+index adb8f9e46..c255360a8 100755
 --- a/configure
 +++ b/configure
-@@ -97,6 +97,7 @@ function usage()
- 	echo "                           No path required."
- 	echo " raid5                     Build with bdev_raid module RAID5 support."
- 	echo "                           No path required."
-+	echo " ssam                      Support to build ssam for DPU storage accel."
+@@ -134,6 +134,8 @@ function usage() {
+ 	echo " --without-golang          No path required."
+ 	echo " --with-aio-fsdev          Build aio FSDEV component."
+ 	echo " --without-aio-fsdev       No path required."
++	echo " --with-ssam               Support to build ssam for DPU storage accel."
++	echo " --without-ssam            No path required."
  	echo ""
  	echo "Environment variables:"
  	echo ""
-@@ -419,6 +420,15 @@ for i in "$@"; do
- 		--without-fuse)
- 			CONFIG[FUSE]=n
+@@ -623,6 +625,15 @@ for i in "$@"; do
+ 		--without-fsdev)
+ 			CONFIG[FSDEV]=n
  			;;
 +		--with-ssam)
 +			CONFIG[SSAM]=y
@@ -255,7 +228,7 @@ index ec61dd73d..a06586d96 100755
  		--with-nvme-cuse)
  			CONFIG[NVME_CUSE]=y
  			;;
-@@ -779,6 +789,13 @@ if [[ "${CONFIG[FUSE]}" = "y" ]]; then
+@@ -1365,6 +1376,13 @@ if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then
  	fi
  fi
  
@@ -266,14 +239,14 @@ index ec61dd73d..a06586d96 100755
 +    fi
 +fi
 +
- if [ "${CONFIG[CET]}" = "y" ]; then
- 	if ! echo -e 'int main(void) { return 0; }\n' | ${BUILD_CMD[@]} -fcf-protection - 2>/dev/null; then
- 		echo --enable-cet requires compiler/linker that supports CET.
+ # For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
+ if [[ "${CONFIG[DEBUG]}" = "y" && $arch = aarch64* && "$CC_TYPE" = "gcc" ]]; then
+ 	GCC_VERSION=$($CC -dumpfullversion)
 diff --git a/include/spdk/event.h b/include/spdk/event.h
-index f757b337c..cc55752e9 100644
+index 94895a684..6d4e06f5b 100644
 --- a/include/spdk/event.h
 +++ b/include/spdk/event.h
-@@ -232,6 +232,8 @@ void spdk_app_stop(int rc);
+@@ -274,6 +274,8 @@ void spdk_app_stop(int rc);
   */
  int spdk_app_get_shm_id(void);
  
@@ -282,26 +255,6 @@ index f757b337c..cc55752e9 100644
  /**
   * Convert a string containing a CPU core mask into a bitmask
   *
-diff --git a/include/spdk/json.h b/include/spdk/json.h
-index 59b5a2fb5..6e4a77739 100644
---- a/include/spdk/json.h
-+++ b/include/spdk/json.h
-@@ -204,6 +204,7 @@ struct spdk_json_write_ctx *spdk_json_write_begin(spdk_json_write_cb write_cb, v
- int spdk_json_write_end(struct spdk_json_write_ctx *w);
- int spdk_json_write_null(struct spdk_json_write_ctx *w);
- int spdk_json_write_bool(struct spdk_json_write_ctx *w, bool val);
-+int spdk_json_write_uint16(struct spdk_json_write_ctx *w, uint16_t val);
- int spdk_json_write_int32(struct spdk_json_write_ctx *w, int32_t val);
- int spdk_json_write_uint32(struct spdk_json_write_ctx *w, uint32_t val);
- int spdk_json_write_int64(struct spdk_json_write_ctx *w, int64_t val);
-@@ -254,6 +255,7 @@ int spdk_json_write_val_raw(struct spdk_json_write_ctx *w, const void *data, siz
- /* Utility functions */
- int spdk_json_write_named_null(struct spdk_json_write_ctx *w, const char *name);
- int spdk_json_write_named_bool(struct spdk_json_write_ctx *w, const char *name, bool val);
-+int spdk_json_write_named_uint16(struct spdk_json_write_ctx *w, const char *name, uint16_t val);
- int spdk_json_write_named_int32(struct spdk_json_write_ctx *w, const char *name, int32_t val);
- int spdk_json_write_named_uint32(struct spdk_json_write_ctx *w, const char *name, uint32_t val);
- int spdk_json_write_named_uint64(struct spdk_json_write_ctx *w, const char *name, uint64_t val);
 diff --git a/include/spdk/ssam.h b/include/spdk/ssam.h
 new file mode 100644
 index 000000000..d37ce1571
@@ -548,39 +501,39 @@ index 000000000..d37ce1571
 +
 +#endif /* SSAM_H */
 diff --git a/lib/Makefile b/lib/Makefile
-index eab297ed0..1cb7f873a 100644
+index d78dc063c..d97bfe2cc 100644
 --- a/lib/Makefile
 +++ b/lib/Makefile
-@@ -45,6 +45,7 @@ endif
+@@ -27,6 +27,7 @@ endif
  DIRS-$(CONFIG_OCF) += env_ocf
  DIRS-$(CONFIG_IDXD) += idxd
  DIRS-$(CONFIG_VHOST) += vhost
 +DIRS-$(CONFIG_SSAM) += ssam
  DIRS-$(CONFIG_VIRTIO) += virtio
- DIRS-$(CONFIG_REDUCE) += reduce
- DIRS-$(CONFIG_RDMA) += rdma
+ DIRS-$(CONFIG_RDMA) += rdma_provider
+ DIRS-$(CONFIG_RDMA) += rdma_utils
 diff --git a/lib/bdev/bdev.c b/lib/bdev/bdev.c
-index 2a642d603..5f31e3f5c 100644
+index b1ba00291..3197afbdb 100644
 --- a/lib/bdev/bdev.c
 +++ b/lib/bdev/bdev.c
-@@ -49,6 +49,7 @@
+@@ -24,6 +24,7 @@
  #include "spdk/bdev_module.h"
  #include "spdk/log.h"
  #include "spdk/string.h"
 +#include "spdk/event.h"
  
  #include "bdev_internal.h"
- 
-@@ -2563,6 +2564,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
+ #include "spdk_internal/trace_defs.h"
+@@ -4228,6 +4229,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
  {
  	struct spdk_bdev_shared_resource *shared_resource;
  	struct lba_range *range;
 +	struct spdk_bdev_io *bdev_io, *tmp;
  
- 	while (!TAILQ_EMPTY(&ch->locked_ranges)) {
- 		range = TAILQ_FIRST(&ch->locked_ranges);
-@@ -2573,6 +2575,11 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
- 	spdk_put_io_channel(ch->channel);
+ 	bdev_free_io_stat(ch->stat);
+ #ifdef SPDK_CONFIG_VTUNE
+@@ -4244,6 +4246,11 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
+ 	spdk_put_io_channel(ch->accel_channel);
  
  	shared_resource = ch->shared_resource;
 +	ch->shared_resource = NULL;
@@ -591,7 +544,7 @@ index 2a642d603..5f31e3f5c 100644
  
  	assert(TAILQ_EMPTY(&ch->io_locked));
  	assert(TAILQ_EMPTY(&ch->io_submitted));
-@@ -5178,6 +5185,15 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
+@@ -7928,6 +7935,15 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
  	struct spdk_bdev_channel *bdev_ch = bdev_io->internal.ch;
  	struct spdk_bdev_shared_resource *shared_resource = bdev_ch->shared_resource;
  
@@ -604,14 +557,14 @@ index 2a642d603..5f31e3f5c 100644
 +		return;
 +	}
 +
- 	bdev_io->internal.status = status;
- 
- 	if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_RESET)) {
+ 	if (spdk_unlikely(bdev_io->internal.status != SPDK_BDEV_IO_STATUS_PENDING)) {
+ 		SPDK_ERRLOG("Unexpected completion on IO from %s module, status was %s\n",
+ 			    spdk_bdev_get_module_name(bdev),
 diff --git a/lib/event/app.c b/lib/event/app.c
-index 03f969204..15b082651 100644
+index 810d6da9c..c9d20d267 100644
 --- a/lib/event/app.c
 +++ b/lib/event/app.c
-@@ -81,6 +81,11 @@ spdk_app_get_shm_id(void)
+@@ -77,6 +77,11 @@ spdk_app_get_shm_id(void)
  	return g_spdk_app.shm_id;
  }
  
@@ -623,12 +576,24 @@ index 03f969204..15b082651 100644
  /* append one empty option to indicate the end of the array */
  static const struct option g_cmdline_options[] = {
  #define CONFIG_FILE_OPT_IDX	'c'
-diff --git a/lib/event/json_config.c b/lib/event/json_config.c
-index 67890ded4..5e1b959c4 100644
---- a/lib/event/json_config.c
-+++ b/lib/event/json_config.c
-@@ -355,6 +355,15 @@ app_json_config_load_subsystem_config_entry(void *_ctx)
- 	size_t params_len = 0;
+diff --git a/lib/event/spdk_event.map b/lib/event/spdk_event.map
+index 1eaa301b4..bacd17012 100644
+--- a/lib/event/spdk_event.map
++++ b/lib/event/spdk_event.map
+@@ -16,6 +16,7 @@
+ 	spdk_event_call;
+ 	spdk_framework_enable_context_switch_monitor;
+ 	spdk_framework_context_switch_monitor_enabled;
++	spdk_get_shutdown_sig_received;
+ 
+ 	# Public scheduler functions
+ 	spdk_scheduler_set;
+diff --git a/lib/init/json_config.c b/lib/init/json_config.c
+index 787fd992b..fa504e673 100644
+--- a/lib/init/json_config.c
++++ b/lib/init/json_config.c
+@@ -335,6 +335,15 @@ app_json_config_load_subsystem_config_entry(void *_ctx)
+ 	uint32_t state_mask = 0, cur_state_mask, startup_runtime = SPDK_RPC_STARTUP | SPDK_RPC_RUNTIME;
  	int rc;
  
 +	if (spdk_get_shutdown_sig_received()) {
@@ -643,61 +608,11 @@ index 67890ded4..5e1b959c4 100644
  	if (ctx->config_it == NULL) {
  		SPDK_DEBUG_APP_CFG("Subsystem '%.*s': configuration done.\n", ctx->subsystem_name->len,
  				   (char *)ctx->subsystem_name->start);
-diff --git a/lib/event/spdk_event.map b/lib/event/spdk_event.map
-index 9a4ba5603..54a6d73cb 100644
---- a/lib/event/spdk_event.map
-+++ b/lib/event/spdk_event.map
-@@ -40,6 +40,7 @@
- 	spdk_subsystem_config_json;
- 	spdk_rpc_initialize;
- 	spdk_rpc_finish;
-+	spdk_get_shutdown_sig_received;
- 
- 	local: *;
- };
-diff --git a/lib/json/json_write.c b/lib/json/json_write.c
-index 7e9fbb5c3..f2c385f7b 100644
---- a/lib/json/json_write.c
-+++ b/lib/json/json_write.c
-@@ -217,6 +217,18 @@ spdk_json_write_bool(struct spdk_json_write_ctx *w, bool val)
- 	}
- }
- 
-+int
-+spdk_json_write_uint16(struct spdk_json_write_ctx *w, uint16_t val)
-+{
-+	char buf[32];
-+	int count;
-+
-+	if (begin_value(w)) { return fail(w); }
-+	count = snprintf(buf, sizeof(buf), "%" PRIu16, val);
-+	if (count <= 0 || (size_t)count >= sizeof(buf)) { return fail(w); }
-+	return emit(w, buf, count);
-+}
-+
- int
- spdk_json_write_int32(struct spdk_json_write_ctx *w, int32_t val)
- {
-@@ -602,6 +614,14 @@ int spdk_json_write_named_bool(struct spdk_json_write_ctx *w, const char *name,
- 	return rc ? rc : spdk_json_write_bool(w, val);
- }
- 
-+int 
-+spdk_json_write_named_uint16(struct spdk_json_write_ctx *w, const char *name, uint16_t val)
-+{
-+	int rc = spdk_json_write_name(w, name);
-+
-+	return rc ? rc : spdk_json_write_uint16(w, val);
-+}
-+
- int spdk_json_write_named_int32(struct spdk_json_write_ctx *w, const char *name, int32_t val)
- {
- 	int rc = spdk_json_write_name(w, name);
 diff --git a/lib/scsi/lun.c b/lib/scsi/lun.c
-index fef179ef2..7264f1037 100644
+index 586876d6e..4774d60d4 100644
 --- a/lib/scsi/lun.c
 +++ b/lib/scsi/lun.c
-@@ -38,6 +38,8 @@
+@@ -10,6 +10,8 @@
  #include "spdk/thread.h"
  #include "spdk/util.h"
  #include "spdk/likely.h"
@@ -706,7 +621,7 @@ index fef179ef2..7264f1037 100644
  
  static void scsi_lun_execute_tasks(struct spdk_scsi_lun *lun);
  static void _scsi_lun_execute_mgmt_task(struct spdk_scsi_lun *lun);
-@@ -352,6 +354,16 @@ _scsi_lun_hot_remove(void *arg1)
+@@ -347,6 +349,16 @@ _scsi_lun_hot_remove(void *arg1)
  {
  	struct spdk_scsi_lun *lun = arg1;
  
@@ -13903,20 +13818,22 @@ index 000000000..54f99162f
 +
 +SPDK_LOG_REGISTER_COMPONENT(ssam_scsi)
 diff --git a/mk/spdk.lib_deps.mk b/mk/spdk.lib_deps.mk
-index a6c7825b7..8328eecf9 100644
+index 5af86e900..afd8edd1c 100644
 --- a/mk/spdk.lib_deps.mk
 +++ b/mk/spdk.lib_deps.mk
-@@ -169,4 +169,5 @@ DEPDIRS-event_scsi := event scsi event_bdev
+@@ -192,6 +192,7 @@ DEPDIRS-event_vfu_tgt := init vfu_tgt
+ DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
+ DEPDIRS-event_keyring := init json keyring
+ DEPDIRS-event_fsdev := init fsdev
++DEPDIRS-event_ssam := init ssam event_scsi
  
- DEPDIRS-event_iscsi := event iscsi event_scsi event_sock
- DEPDIRS-event_vhost := event vhost event_scsi
-+DEPDIRS-event_ssam := event ssam event_scsi
- DEPDIRS-event_sock := event sock
+ # module/vfu_device
+ 
 diff --git a/module/bdev/iscsi/bdev_iscsi.c b/module/bdev/iscsi/bdev_iscsi.c
-index 7516ea95e..579fb9a0f 100644
+index b624f3fb4..b4878e2f6 100644
 --- a/module/bdev/iscsi/bdev_iscsi.c
 +++ b/module/bdev/iscsi/bdev_iscsi.c
-@@ -42,9 +42,11 @@
+@@ -14,9 +14,11 @@
  #include "spdk/rpc.h"
  #include "spdk/string.h"
  #include "spdk/iscsi_spec.h"
@@ -13928,32 +13845,32 @@ index 7516ea95e..579fb9a0f 100644
  
  #include "iscsi/iscsi.h"
  #include "iscsi/scsi-lowlevel.h"
-@@ -55,6 +57,7 @@ struct bdev_iscsi_lun;
+@@ -27,6 +29,7 @@ struct bdev_iscsi_lun;
  
  #define BDEV_ISCSI_CONNECTION_POLL_US 500 /* 0.5 ms */
  #define BDEV_ISCSI_NO_MAIN_CH_POLL_US 10000 /* 10ms */
 +#define BDEV_ISCSI_TIMEOUT 10 /* 10s */
  
- #define DEFAULT_INITIATOR_NAME "iqn.2016-06.io.spdk:init"
- 
-@@ -85,6 +88,8 @@ struct bdev_iscsi_lun {
- 	struct spdk_thread		*no_main_ch_poller_td;
- 	bool				unmap_supported;
+ #define BDEV_ISCSI_TIMEOUT_POLL_PERIOD_DEFAULT	1000000ULL /* 1 s */
+ #define BDEV_ISCSI_TIMEOUT_DEFAULT 30 /* 30 s */
+@@ -80,6 +83,8 @@ struct bdev_iscsi_lun {
+ 	uint32_t			max_unmap;
  	struct spdk_poller		*poller;
+ 	struct spdk_poller		*timeout_poller;
 +	uint32_t unfinished_io_num;
 +	uint64_t event_tsc;
  };
  
  struct bdev_iscsi_io_channel {
-@@ -101,6 +106,7 @@ struct bdev_iscsi_conn_req {
- 	bool					unmap_supported;
+@@ -97,6 +102,7 @@ struct bdev_iscsi_conn_req {
+ 	uint32_t				max_unmap;
  	int					lun;
  	int					status;
 +	int                 attempts;
  	TAILQ_ENTRY(bdev_iscsi_conn_req)	link;
  };
  
-@@ -130,6 +136,7 @@ _iscsi_free_lun(void *arg)
+@@ -149,6 +155,7 @@ _iscsi_free_lun(void *arg)
  	struct bdev_iscsi_lun *lun = arg;
  
  	assert(lun != NULL);
@@ -13961,7 +13878,7 @@ index 7516ea95e..579fb9a0f 100644
  	iscsi_destroy_context(lun->context);
  	pthread_mutex_destroy(&lun->mutex);
  	free(lun->bdev.name);
-@@ -195,6 +202,9 @@ static void
+@@ -236,6 +243,9 @@ static void
  bdev_iscsi_io_complete(struct bdev_iscsi_io *iscsi_io, enum spdk_bdev_io_status status)
  {
  	iscsi_io->status = status;
@@ -13971,7 +13888,7 @@ index 7516ea95e..579fb9a0f 100644
  	if (iscsi_io->submit_td != NULL) {
  		spdk_thread_send_msg(iscsi_io->submit_td, _bdev_iscsi_io_complete, iscsi_io);
  	} else {
-@@ -206,6 +216,16 @@ bdev_iscsi_io_complete(struct bdev_iscsi_io *iscsi_io, enum spdk_bdev_io_status
+@@ -260,6 +270,16 @@ _bdev_iscsi_is_size_change(int status, struct scsi_task *task)
  static void
  bdev_iscsi_command_cb(struct iscsi_context *context, int status, void *_task, void *_iscsi_io)
  {
@@ -13987,8 +13904,8 @@ index 7516ea95e..579fb9a0f 100644
 +
  	struct scsi_task *task = _task;
  	struct bdev_iscsi_io *iscsi_io = _iscsi_io;
- 
-@@ -278,6 +298,17 @@ bdev_iscsi_destruct_cb(void *ctx)
+ 	struct spdk_bdev_io *bdev_io;
+@@ -412,6 +432,17 @@ bdev_iscsi_destruct_cb(void *ctx)
  {
  	struct bdev_iscsi_lun *lun = ctx;
  
@@ -14006,7 +13923,7 @@ index 7516ea95e..579fb9a0f 100644
  	spdk_poller_unregister(&lun->no_main_ch_poller);
  	spdk_io_device_unregister(lun, _iscsi_free_lun);
  }
-@@ -379,7 +410,17 @@ bdev_iscsi_poll_lun(void *_lun)
+@@ -537,7 +568,17 @@ bdev_iscsi_poll_lun(void *_lun)
  		return SPDK_POLLER_IDLE;
  	}
  
@@ -14024,7 +13941,7 @@ index 7516ea95e..579fb9a0f 100644
  		if (iscsi_service(lun->context, pfd.revents) < 0) {
  			SPDK_ERRLOG("iscsi_service failed: %s\n", iscsi_get_error(lun->context));
  		}
-@@ -387,6 +428,22 @@ bdev_iscsi_poll_lun(void *_lun)
+@@ -545,6 +586,22 @@ bdev_iscsi_poll_lun(void *_lun)
  		return SPDK_POLLER_BUSY;
  	}
  
@@ -14047,7 +13964,7 @@ index 7516ea95e..579fb9a0f 100644
  	return SPDK_POLLER_IDLE;
  }
  
-@@ -431,7 +488,12 @@ static void _bdev_iscsi_submit_request(void *_bdev_io)
+@@ -599,7 +656,12 @@ _bdev_iscsi_submit_request(void *_bdev_io)
  	struct spdk_bdev_io *bdev_io = _bdev_io;
  	struct bdev_iscsi_io *iscsi_io = (struct bdev_iscsi_io *)bdev_io->driver_ctx;
  	struct bdev_iscsi_lun *lun = (struct bdev_iscsi_lun *)bdev_io->bdev->ctxt;
@@ -14061,23 +13978,23 @@ index 7516ea95e..579fb9a0f 100644
  	switch (bdev_io->type) {
  	case SPDK_BDEV_IO_TYPE_READ:
  		spdk_bdev_io_get_buf(bdev_io, bdev_iscsi_get_buf_cb,
-@@ -538,6 +600,7 @@ _iscsi_destroy_cb(void *ctx)
- 
+@@ -714,6 +776,7 @@ _iscsi_destroy_cb(void *ctx)
  	lun->main_td = NULL;
  	spdk_poller_unregister(&lun->poller);
+ 	spdk_poller_unregister(&lun->timeout_poller);
 +	SPDK_NOTICELOG("iscsi bdev %s unregister main poller\n", lun->bdev.name);
  
  	pthread_mutex_unlock(&lun->mutex);
  }
-@@ -638,6 +701,7 @@ create_iscsi_lun(struct iscsi_context *context, int lun_id, char *url, char *ini
- 	lun->lun_id = lun_id;
- 	lun->url = url;
- 	lun->initiator_iqn = initiator_iqn;
+@@ -814,6 +877,7 @@ create_iscsi_lun(struct bdev_iscsi_conn_req *req, uint64_t num_blocks,
+ 	lun->lun_id = req->lun;
+ 	lun->url = req->url;
+ 	lun->initiator_iqn = req->initiator_iqn;
 +	lun->event_tsc = spdk_get_ticks();
  
  	pthread_mutex_init(&lun->mutex, NULL);
  
-@@ -770,10 +834,34 @@ iscsi_bdev_conn_poll(void *arg)
+@@ -1002,10 +1066,34 @@ iscsi_bdev_conn_poll(void *arg)
  
  		if (pfd.revents != 0) {
  			if (iscsi_service(context, pfd.revents) < 0) {
@@ -14112,7 +14029,7 @@ index 7516ea95e..579fb9a0f 100644
  		if (req->status == 0) {
  			/*
  			 * The request completed successfully.
-@@ -847,10 +935,12 @@ create_iscsi_disk(const char *bdev_name, const char *url, const char *initiator_
+@@ -1080,10 +1168,12 @@ create_iscsi_disk(const char *bdev_name, const char *url, const char *initiator_
  
  	iscsi_destroy_url(iscsi_url);
  	req->status = -1;
@@ -14126,28 +14043,28 @@ index 7516ea95e..579fb9a0f 100644
  	return 0;
  
 diff --git a/module/event/subsystems/Makefile b/module/event/subsystems/Makefile
-index a78985ec3..0c1822d27 100644
+index aafcec8e2..d8ec1863d 100644
 --- a/module/event/subsystems/Makefile
 +++ b/module/event/subsystems/Makefile
-@@ -41,6 +41,7 @@ DIRS-y += nbd
+@@ -16,6 +16,7 @@ endif
  endif
  
- DIRS-$(CONFIG_VHOST) += vhost
+ DIRS-$(CONFIG_VHOST) += vhost_blk vhost_scsi
 +DIRS-$(CONFIG_SSAM) += ssam
+ DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
+ DIRS-$(CONFIG_FSDEV) += fsdev
  
- # These dependencies are not based specifically on symbols, but rather
- # the subsystem dependency tree defined within the event subsystem C files
-@@ -52,6 +53,7 @@ DEPDIRS-nbd := bdev
+@@ -31,6 +32,7 @@ DEPDIRS-ublk := bdev
  DEPDIRS-nvmf := bdev
  DEPDIRS-scsi := bdev
- DEPDIRS-vhost := scsi
+ DEPDIRS-vhost_scsi := scsi
 +DEPDIRS-ssam := scsi
  
  .PHONY: all clean $(DIRS-y)
  
 diff --git a/module/event/subsystems/ssam/Makefile b/module/event/subsystems/ssam/Makefile
 new file mode 100644
-index 000000000..47b8c6dc9
+index 000000000..58104b329
 --- /dev/null
 +++ b/module/event/subsystems/ssam/Makefile
 @@ -0,0 +1,17 @@
@@ -14159,7 +14076,7 @@ index 000000000..47b8c6dc9
 +SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
 +include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 +
-+SO_VER := 3
++SO_VER := 6
 +SO_MINOR := 0
 +
 +C_SRCS = ssam.c
@@ -14170,10 +14087,10 @@ index 000000000..47b8c6dc9
 +include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
 diff --git a/module/event/subsystems/ssam/ssam.c b/module/event/subsystems/ssam/ssam.c
 new file mode 100644
-index 000000000..c8518da19
+index 000000000..2cf52bf90
 --- /dev/null
 +++ b/module/event/subsystems/ssam/ssam.c
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,46 @@
 +/*
 + *   BSD LICENSE
 + *   Copyright (c) Huawei Technologies Co., Ltd. 2021-2021. All rights reserved.
@@ -14185,6 +14102,7 @@ index 000000000..c8518da19
 +#include "spdk/ssam.h"
 +
 +#include "spdk_internal/event.h"
++#include "spdk_internal/init.h"
 +
 +static void
 +ssam_subsystem_init_done(int rc)
@@ -14219,24 +14137,310 @@ index 000000000..c8518da19
 +
 +SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_ssam);
 +SPDK_SUBSYSTEM_DEPEND(ssam, scsi)
+diff --git a/python/spdk/rpc/__init__.py b/python/spdk/rpc/__init__.py
+index 777de54ef..962dd5589 100644
+--- a/python/spdk/rpc/__init__.py
++++ b/python/spdk/rpc/__init__.py
+@@ -29,6 +29,7 @@ from . import nvmf
+ from . import subsystem
+ from . import trace
+ from . import vhost
++from . import ssam
+ from . import vmd
+ from . import sock
+ from . import vfio_user
+diff --git a/python/spdk/rpc/ssam.py b/python/spdk/rpc/ssam.py
+new file mode 100644
+index 000000000..1f3c15cca
+--- /dev/null
++++ b/python/spdk/rpc/ssam.py
+@@ -0,0 +1,259 @@
++from .helpers import deprecated_alias
++from getpass import getuser
++
++
++def log_command_info(client, event):
++    """log event info.
++    Args:
++        user_name: event user
++        event: function id of PCI device
++        src_addr: queue number of ssam
++    """
++    params = {
++        'user_name': getuser(),
++        'event': event,
++        'src_addr': "localhost",
++    }
++    return client.call('log_command_info', params)
++
++
++def log_info(func):
++    def wrapper_log_info(arg, *args, **kw):
++        log_command_info(arg.client, func.__name__)
++        return func(arg, *args, **kw)
++    return wrapper_log_info
++
++
++def create_blk_controller(client, dev_name, index, readonly=None, serial=None):
++    """Create ssam BLK controller.
++    Args:
++        dev_name: device name to add to controller
++        index: function id or dbdf of PCI device
++        queues: queue number of ssam
++        readonly: set controller as read-only
++        serial: set volume id
++    """
++    params = {
++        'dev_name': dev_name,
++        'index': index,
++    }
++    if readonly:
++        params['readonly'] = readonly
++    if serial:
++        params['serial'] = serial
++    return client.call('create_blk_controller', params)
++
++
++def get_controllers(client, function_id=None, dbdf=None):
++    """Get information about configured ssam controllers.
++
++    Args:
++        function_id: function id of PCI device
++        dbdf: dbdf of PCI device
++
++    Returns:
++        List of ssam controllers.
++    """
++    params = {}
++    if function_id is not None:
++        params['function_id'] = function_id
++    if dbdf is not None:
++        params['dbdf'] = dbdf
++    return client.call('get_controllers', params)
++
++
++def get_scsi_controllers(client, name=None):
++    """Get information about configured ssam controllers.
++
++    Args:
++        name: name of scsi controller
++
++    Returns:
++        List of ssam scsi controllers.
++    """
++    params = {}
++    if name is not None:
++        params['name'] = name
++    return client.call('get_scsi_controllers', params)
++
++
++def delete_controller(client, index):
++    """Delete ssam controller from configuration.
++    Args:
++        index: function id or dbdf of PCI device
++    """
++    params = {'index': index}
++    return client.call('delete_controller', params)
++
++
++def delete_scsi_controller(client, name):
++    """Delete ssam controller from configuration.
++    Args:
++        name: scsi controller name to be delete
++    """
++    params = {'name': name}
++    return client.call('delete_scsi_controller', params)
++
++
++def controller_get_iostat(client, function_id=None, dbdf=None):
++    """Get iostat about configured ssam controllers.
++
++    Args:
++        function_id: function id of PCI device
++        dbdf: dbdf of PCI device
++
++    Returns:
++        List of iostat of ssam controllers.
++    """
++    params = {}
++    if function_id is not None:
++        params['function_id'] = function_id
++    if dbdf is not None:
++        params['dbdf'] = dbdf
++    return client.call('controller_get_iostat', params)
++
++
++def controller_clear_iostat(client, type=None):
++    """Clear iostat about configured ssam controllers.
++
++    Args:
++        type: blk,scsi,fs
++
++    """
++    params = {}
++    if type is not None:
++        params['type'] = type
++    return client.call('controller_clear_iostat', params)
++
++
++def bdev_resize(client, function_id, new_size_in_mb):
++    """Resize bdev in the system.
++    Args:
++        function_id: function id of PCI device
++        new_size_in_mb: new bdev size for resize operation. The unit is MiB
++    """
++    params = {
++        'function_id': function_id,
++        'new_size_in_mb': new_size_in_mb,
++    }
++    return client.call('bdev_resize', params)
++
++
++def scsi_bdev_resize(client, name, tgt_id, new_size_in_mb):
++    """Resize scsi bdev in the system.
++    Args:
++        name: controller name of PCI device
++        tgt_id: tgt id of bdev
++        new_size_in_mb: new bdev size for resize operation. The unit is MiB
++    """
++    params = {
++        'name': name,
++        'tgt_id': tgt_id,
++        'new_size_in_mb': new_size_in_mb,
++    }
++    return client.call('scsi_bdev_resize', params)
++
++
++def bdev_aio_resize(client, name, new_size_in_mb):
++    """Resize aio bdev in the system.
++    Args:
++        name: aio bdev name
++        new_size_in_mb: new bdev size for resize operation. The unit is MiB
++    """
++    params = {
++        'name': name,
++        'new_size_in_mb': new_size_in_mb,
++    }
++    return client.call('bdev_aio_resize', params)
++
++
++def os_ready(client):
++    """Write ready flag for booting OS.
++
++    """
++    return client.call('os_ready')
++
++
++def create_scsi_controller(client, dbdf, name):
++    """Create ssam scsi controller.
++    Args:
++        dbdf: the pci dbdf of virtio scsi controller
++        name: controller name to be create
++    """
++    params = {
++        'dbdf': dbdf,
++        'name': name,
++    }
++
++    return client.call('create_scsi_controller', params)
++
++
++def scsi_controller_add_target(client, name, scsi_tgt_num, bdev_name):
++    """Add LUN to ssam scsi controller target.
++    Args:
++        name: controller name where add lun
++        scsi_tgt_num: target number to use
++        bdev_name: name of bdev to add to target
++    """
++    params = {
++        'name': name,
++        'scsi_tgt_num': scsi_tgt_num,
++        'bdev_name': bdev_name,
++    }
++    return client.call('scsi_controller_add_target', params)
++
++
++def scsi_controller_remove_target(client, name, scsi_tgt_num):
++    """Remove LUN from ssam scsi controller target.
++    Args:
++        name: controller name to remove lun
++        scsi_tgt_num: target number to use
++    """
++    params = {
++        'name': name,
++        'scsi_tgt_num': scsi_tgt_num,
++    }
++    return client.call('scsi_controller_remove_target', params)
++
++
++def scsi_device_iostat(client, name, scsi_tgt_num):
++    """Get iostat about scsi device.
++
++    Args:
++        name: controller name
++        scsi_tgt_num: target number
++
++    Returns:
++        List of iostat of ssam controllers.
++    """
++    params = {
++        'name': name,
++        'scsi_tgt_num': scsi_tgt_num,
++    }
++    return client.call('scsi_device_iostat', params)
++
++
++def device_pcie_list(client):
++    """Show storage device pcie list.
++
++    Returns:
++        List of storage device pcie.
++    """
++
++    return client.call('device_pcie_list')
++
++def get_ssam_info(client):
++    """Get information.
++
++    Returns:
++        List of IO statistics information
++    """
++    return client.call('get_ssam_info')
++
++def set_crc_checklog(client, toggle):
++    """Set io crc check enable or disable.
++    Args:
++        toggle: enable or disable
++    """
++    params = {'toggle': toggle}
++    return client.call('set_crc_checklog', params)
+\ No newline at end of file
 diff --git a/scripts/hw_dpu_rpc.py b/scripts/hw_dpu_rpc.py
 new file mode 100644
-index 000000000..9c4bfce9a
+index 000000000..e3ba93746
 --- /dev/null
 +++ b/scripts/hw_dpu_rpc.py
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,285 @@
 +#!/usr/bin/env python3
++#  SPDX-License-Identifier: BSD-3-Clause
++#  Copyright (C) 2021-2025 Huawei Technologies Co.
++#  All rights reserved.
++#
 +
 +import argparse
 +import logging
-+import rpc
 +import sys
-+from rpc.client import print_dict, JSONRPCException
-+from rpc.helpers import deprecated_aliases
 +import os
 +import stat
 +import pwd
 +import grp
++import json
++
++sys.path.append(os.path.dirname(__file__) + '/../python')
++
++import spdk.rpc as rpc  # noqa
++from spdk.rpc.client import print_dict, JSONRPCException  # noqa
++from spdk.rpc.helpers import deprecated_aliases  # noqa
 +
 +
 +def get_parser():
@@ -14502,305 +14706,6 @@ index 000000000..9c4bfce9a
 +    except JSONRPCException as ex:
 +        print(ex.message)
 +        exit(1)
-diff --git a/scripts/rpc/__init__.py b/scripts/rpc/__init__.py
-index e8fa41e87..1c037d904 100644
---- a/scripts/rpc/__init__.py
-+++ b/scripts/rpc/__init__.py
-@@ -22,6 +22,7 @@ from . import pmem
- from . import subsystem
- from . import trace
- from . import vhost
-+from . import ssam
- from . import vmd
- from . import sock
- from . import client as rpc_client
-diff --git a/scripts/rpc/ssam.py b/scripts/rpc/ssam.py
-new file mode 100644
-index 000000000..1f3c15cca
---- /dev/null
-+++ b/scripts/rpc/ssam.py
-@@ -0,0 +1,259 @@
-+from .helpers import deprecated_alias
-+from getpass import getuser
-+
-+
-+def log_command_info(client, event):
-+    """log event info.
-+    Args:
-+        user_name: event user
-+        event: function id of PCI device
-+        src_addr: queue number of ssam
-+    """
-+    params = {
-+        'user_name': getuser(),
-+        'event': event,
-+        'src_addr': "localhost",
-+    }
-+    return client.call('log_command_info', params)
-+
-+
-+def log_info(func):
-+    def wrapper_log_info(arg, *args, **kw):
-+        log_command_info(arg.client, func.__name__)
-+        return func(arg, *args, **kw)
-+    return wrapper_log_info
-+
-+
-+def create_blk_controller(client, dev_name, index, readonly=None, serial=None):
-+    """Create ssam BLK controller.
-+    Args:
-+        dev_name: device name to add to controller
-+        index: function id or dbdf of PCI device
-+        queues: queue number of ssam
-+        readonly: set controller as read-only
-+        serial: set volume id
-+    """
-+    params = {
-+        'dev_name': dev_name,
-+        'index': index,
-+    }
-+    if readonly:
-+        params['readonly'] = readonly
-+    if serial:
-+        params['serial'] = serial
-+    return client.call('create_blk_controller', params)
-+
-+
-+def get_controllers(client, function_id=None, dbdf=None):
-+    """Get information about configured ssam controllers.
-+
-+    Args:
-+        function_id: function id of PCI device
-+        dbdf: dbdf of PCI device
-+
-+    Returns:
-+        List of ssam controllers.
-+    """
-+    params = {}
-+    if function_id is not None:
-+        params['function_id'] = function_id
-+    if dbdf is not None:
-+        params['dbdf'] = dbdf
-+    return client.call('get_controllers', params)
-+
-+
-+def get_scsi_controllers(client, name=None):
-+    """Get information about configured ssam controllers.
-+
-+    Args:
-+        name: name of scsi controller
-+
-+    Returns:
-+        List of ssam scsi controllers.
-+    """
-+    params = {}
-+    if name is not None:
-+        params['name'] = name
-+    return client.call('get_scsi_controllers', params)
-+
-+
-+def delete_controller(client, index):
-+    """Delete ssam controller from configuration.
-+    Args:
-+        index: function id or dbdf of PCI device
-+    """
-+    params = {'index': index}
-+    return client.call('delete_controller', params)
-+
-+
-+def delete_scsi_controller(client, name):
-+    """Delete ssam controller from configuration.
-+    Args:
-+        name: scsi controller name to be delete
-+    """
-+    params = {'name': name}
-+    return client.call('delete_scsi_controller', params)
-+
-+
-+def controller_get_iostat(client, function_id=None, dbdf=None):
-+    """Get iostat about configured ssam controllers.
-+
-+    Args:
-+        function_id: function id of PCI device
-+        dbdf: dbdf of PCI device
-+
-+    Returns:
-+        List of iostat of ssam controllers.
-+    """
-+    params = {}
-+    if function_id is not None:
-+        params['function_id'] = function_id
-+    if dbdf is not None:
-+        params['dbdf'] = dbdf
-+    return client.call('controller_get_iostat', params)
-+
-+
-+def controller_clear_iostat(client, type=None):
-+    """Clear iostat about configured ssam controllers.
-+
-+    Args:
-+        type: blk,scsi,fs
-+
-+    """
-+    params = {}
-+    if type is not None:
-+        params['type'] = type
-+    return client.call('controller_clear_iostat', params)
-+
-+
-+def bdev_resize(client, function_id, new_size_in_mb):
-+    """Resize bdev in the system.
-+    Args:
-+        function_id: function id of PCI device
-+        new_size_in_mb: new bdev size for resize operation. The unit is MiB
-+    """
-+    params = {
-+        'function_id': function_id,
-+        'new_size_in_mb': new_size_in_mb,
-+    }
-+    return client.call('bdev_resize', params)
-+
-+
-+def scsi_bdev_resize(client, name, tgt_id, new_size_in_mb):
-+    """Resize scsi bdev in the system.
-+    Args:
-+        name: controller name of PCI device
-+        tgt_id: tgt id of bdev
-+        new_size_in_mb: new bdev size for resize operation. The unit is MiB
-+    """
-+    params = {
-+        'name': name,
-+        'tgt_id': tgt_id,
-+        'new_size_in_mb': new_size_in_mb,
-+    }
-+    return client.call('scsi_bdev_resize', params)
-+
-+
-+def bdev_aio_resize(client, name, new_size_in_mb):
-+    """Resize aio bdev in the system.
-+    Args:
-+        name: aio bdev name
-+        new_size_in_mb: new bdev size for resize operation. The unit is MiB
-+    """
-+    params = {
-+        'name': name,
-+        'new_size_in_mb': new_size_in_mb,
-+    }
-+    return client.call('bdev_aio_resize', params)
-+
-+
-+def os_ready(client):
-+    """Write ready flag for booting OS.
-+
-+    """
-+    return client.call('os_ready')
-+
-+
-+def create_scsi_controller(client, dbdf, name):
-+    """Create ssam scsi controller.
-+    Args:
-+        dbdf: the pci dbdf of virtio scsi controller
-+        name: controller name to be create
-+    """
-+    params = {
-+        'dbdf': dbdf,
-+        'name': name,
-+    }
-+
-+    return client.call('create_scsi_controller', params)
-+
-+
-+def scsi_controller_add_target(client, name, scsi_tgt_num, bdev_name):
-+    """Add LUN to ssam scsi controller target.
-+    Args:
-+        name: controller name where add lun
-+        scsi_tgt_num: target number to use
-+        bdev_name: name of bdev to add to target
-+    """
-+    params = {
-+        'name': name,
-+        'scsi_tgt_num': scsi_tgt_num,
-+        'bdev_name': bdev_name,
-+    }
-+    return client.call('scsi_controller_add_target', params)
-+
-+
-+def scsi_controller_remove_target(client, name, scsi_tgt_num):
-+    """Remove LUN from ssam scsi controller target.
-+    Args:
-+        name: controller name to remove lun
-+        scsi_tgt_num: target number to use
-+    """
-+    params = {
-+        'name': name,
-+        'scsi_tgt_num': scsi_tgt_num,
-+    }
-+    return client.call('scsi_controller_remove_target', params)
-+
-+
-+def scsi_device_iostat(client, name, scsi_tgt_num):
-+    """Get iostat about scsi device.
-+
-+    Args:
-+        name: controller name
-+        scsi_tgt_num: target number
-+
-+    Returns:
-+        List of iostat of ssam controllers.
-+    """
-+    params = {
-+        'name': name,
-+        'scsi_tgt_num': scsi_tgt_num,
-+    }
-+    return client.call('scsi_device_iostat', params)
-+
-+
-+def device_pcie_list(client):
-+    """Show storage device pcie list.
-+
-+    Returns:
-+        List of storage device pcie.
-+    """
-+
-+    return client.call('device_pcie_list')
-+
-+def get_ssam_info(client):
-+    """Get information.
-+
-+    Returns:
-+        List of IO statistics information
-+    """
-+    return client.call('get_ssam_info')
-+
-+def set_crc_checklog(client, toggle):
-+    """Set io crc check enable or disable.
-+    Args:
-+        toggle: enable or disable
-+    """
-+    params = {'toggle': toggle}
-+    return client.call('set_crc_checklog', params)
-\ No newline at end of file
-diff --git a/test/unit/lib/json_mock.c b/test/unit/lib/json_mock.c
-index b9cee171e..3d229c575 100644
---- a/test/unit/lib/json_mock.c
-+++ b/test/unit/lib/json_mock.c
-@@ -40,6 +40,7 @@ DEFINE_STUB(spdk_json_write_begin, struct spdk_json_write_ctx *, (spdk_json_writ
- DEFINE_STUB(spdk_json_write_end, int, (struct spdk_json_write_ctx *w), 0);
- DEFINE_STUB(spdk_json_write_null, int, (struct spdk_json_write_ctx *w), 0);
- DEFINE_STUB(spdk_json_write_bool, int, (struct spdk_json_write_ctx *w, bool val), 0);
-+DEFINE_STUB(spdk_json_write_uint16, int, (struct spdk_json_write_ctx *w, uint16_t val), 0);
- DEFINE_STUB(spdk_json_write_int32, int, (struct spdk_json_write_ctx *w, int32_t val), 0);
- DEFINE_STUB(spdk_json_write_uint32, int, (struct spdk_json_write_ctx *w, uint32_t val), 0);
- DEFINE_STUB(spdk_json_write_int64, int, (struct spdk_json_write_ctx *w, int64_t val), 0);
-@@ -60,6 +61,8 @@ DEFINE_STUB(spdk_json_write_name_raw, int, (struct spdk_json_write_ctx *w, const
- DEFINE_STUB(spdk_json_write_named_null, int, (struct spdk_json_write_ctx *w, const char *name), 0);
- DEFINE_STUB(spdk_json_write_named_bool, int, (struct spdk_json_write_ctx *w, const char *name,
- 		bool val), 0);
-+DEFINE_STUB(spdk_json_write_named_uint16, int, (struct spdk_json_write_ctx *w, const char *name,
-+		uint16_t val), 0);
- DEFINE_STUB(spdk_json_write_named_int32, int, (struct spdk_json_write_ctx *w, const char *name,
- 		int32_t val), 0);
- DEFINE_STUB(spdk_json_write_named_uint32, int, (struct spdk_json_write_ctx *w, const char *name,
 -- 
 2.28.0.windows.1
 
