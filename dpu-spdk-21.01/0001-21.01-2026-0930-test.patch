@@ -1,4 +1,4 @@
-From 7ed7410518f42600e6e738dcee9830ea6d819901 Mon Sep 17 00:00:00 2001
+From d33fd43250265ad813b80cff87814d056124e3ac Mon Sep 17 00:00:00 2001
 From: liuziming1224 <liuziming7@huawei.com>
 Date: Thu, 13 Aug 2026 13:37:21 +0800
 Subject: [PATCH] spdk21.01 patch
@@ -22,8 +22,8 @@ Subject: [PATCH] spdk21.01 patch
  lib/scsi/lun.c                             |   12 +
  lib/ssam/Makefile                          |   26 +
  lib/ssam/spdk_ssam.map                     |   16 +
- lib/ssam/ssam.c                            | 1853 ++++++++++++++
- lib/ssam/ssam_blk.c                        | 2151 +++++++++++++++++
+ lib/ssam/ssam.c                            | 1854 ++++++++++++++
+ lib/ssam/ssam_blk.c                        | 2152 +++++++++++++++++
  lib/ssam/ssam_config.c                     |  410 ++++
  lib/ssam/ssam_config.h                     |   26 +
  lib/ssam/ssam_device_pcie.c                |  224 ++
@@ -37,7 +37,7 @@ Subject: [PATCH] spdk21.01 patch
  lib/ssam/ssam_internal.h                   |  531 ++++
  lib/ssam/ssam_malloc.c                     |   30 +
  lib/ssam/ssam_rpc.c                        | 1822 ++++++++++++++
- lib/ssam/ssam_scsi.c                       | 2541 ++++++++++++++++++++
+ lib/ssam/ssam_scsi.c                       | 2554 ++++++++++++++++++++
  mk/spdk.lib_deps.mk                        |    1 +
  module/bdev/iscsi/bdev_iscsi.c             |   92 +-
  module/event/subsystems/Makefile           |    2 +
@@ -47,7 +47,7 @@ Subject: [PATCH] spdk21.01 patch
  scripts/rpc/__init__.py                    |    1 +
  scripts/rpc/ssam.py                        |  259 ++
  test/unit/lib/json_mock.c                  |    3 +
- 43 files changed, 14193 insertions(+), 3 deletions(-)
+ 43 files changed, 14208 insertions(+), 3 deletions(-)
  create mode 100644 app/ssam/Makefile
  create mode 100644 app/ssam/ssam.c
  create mode 100644 include/spdk/ssam.h
@@ -779,10 +779,10 @@ index 000000000..9bef6f956
 +};
 diff --git a/lib/ssam/ssam.c b/lib/ssam/ssam.c
 new file mode 100644
-index 000000000..0c4352678
+index 000000000..315200fab
 --- /dev/null
 +++ b/lib/ssam/ssam.c
-@@ -0,0 +1,1853 @@
+@@ -0,0 +1,1854 @@
 +/*
 + *   BSD LICENSE
 + *   Copyright (c) Huawei Technologies Co., Ltd. 2021-2021. All rights reserved.
@@ -2325,6 +2325,7 @@ index 000000000..0c4352678
 +	rc = spdk_thread_send_msg(smsession->thread, ssam_send_event, ev_ctx);
 +	if (rc != 0) {
 +		SPDK_ERRLOG("send thread msg failed\n");
++		smsession->pending_async_op_num--;
 +		free(ev_ctx);
 +		return rc;
 +	}
@@ -2638,10 +2639,10 @@ index 000000000..0c4352678
 +SPDK_LOG_REGISTER_COMPONENT(ssam)
 diff --git a/lib/ssam/ssam_blk.c b/lib/ssam/ssam_blk.c
 new file mode 100644
-index 000000000..6a4a08ffa
+index 000000000..41eae7145
 --- /dev/null
 +++ b/lib/ssam/ssam_blk.c
-@@ -0,0 +1,2151 @@
+@@ -0,0 +1,2152 @@
 +/*
 + *   BSD LICENSE
 + *   Copyright (c) Huawei Technologies Co., Ltd. 2021-2021. All rights reserved.
@@ -4432,6 +4433,7 @@ index 000000000..6a4a08ffa
 +	ret = ssam_blk_check_io_req(smdev, io_req);
 +	if (ret < 0) {
 +		smdev->discard_io_num++;
++		smdev->io_num--;
 +		return;
 +	}
 +
@@ -11357,10 +11359,10 @@ index 000000000..05cd6457d
 +SPDK_LOG_REGISTER_COMPONENT(ssam_rpc)
 diff --git a/lib/ssam/ssam_scsi.c b/lib/ssam/ssam_scsi.c
 new file mode 100644
-index 000000000..54f99162f
+index 000000000..d942822f5
 --- /dev/null
 +++ b/lib/ssam/ssam_scsi.c
-@@ -0,0 +1,2541 @@
+@@ -0,0 +1,2554 @@
 +/*
 + *   BSD LICENSE
 + *   Copyright (c) Huawei Technologies Co., Ltd. 2021-2021. All rights reserved.
@@ -12442,6 +12444,19 @@ index 000000000..54f99162f
 +	struct ssam_io_response io_resp;
 +	struct iovec io_vec;
 +	int rc;
++
++	if (io_cmd->iovs == NULL) {
++		SPDK_ERRLOG("iovs is NULL\n");
++		return -1;
++	}
++	if (io_cmd->writable && io_cmd->iovcnt < 2) {
++		SPDK_ERRLOG("writable io iovcnt %u < 2\n", io_cmd->iovcnt);
++		return -1;
++	}
++	if (!io_cmd->writable && io_cmd->iovcnt < 2) {
++		SPDK_ERRLOG("readable io iovcnt %u < 2\n", io_cmd->iovcnt);
++		return -1;
++	}
 +
 +	memset(&io_resp, 0, sizeof(io_resp));
 +	io_resp.gfunc_id = io_req->gfunc_id;
