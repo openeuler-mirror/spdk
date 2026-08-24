@@ -1,7 +1,7 @@
-From d33fd43250265ad813b80cff87814d056124e3ac Mon Sep 17 00:00:00 2001
+From 01034d5cd75e04ef2c722964ef0d02a001603dfd Mon Sep 17 00:00:00 2001
 From: liuziming1224 <liuziming7@huawei.com>
 Date: Thu, 13 Aug 2026 13:37:21 +0800
-Subject: [PATCH] spdk21.01 patch
+Subject: [PATCH 1/2] spdk21.01 patch
 
 ---
  CONFIG                                     |    5 +-
@@ -14816,6 +14816,32 @@ index b9cee171e..3d229c575 100644
  DEFINE_STUB(spdk_json_write_named_int32, int, (struct spdk_json_write_ctx *w, const char *name,
  		int32_t val), 0);
  DEFINE_STUB(spdk_json_write_named_uint32, int, (struct spdk_json_write_ctx *w, const char *name,
+-- 
+2.28.0.windows.1
+
+
+From 80bf70f4cb83317ade93b933e4b0b1e0c2920ba9 Mon Sep 17 00:00:00 2001
+From: l00958579 <linxinyi6@huawei.com>
+Date: Fri, 21 Aug 2026 15:07:06 +0800
+Subject: [PATCH 2/2] chongming
+
+---
+ lib/ssam/ssam.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lib/ssam/ssam.c b/lib/ssam/ssam.c
+index 315200fab..1378a93a9 100644
+--- a/lib/ssam/ssam.c
++++ b/lib/ssam/ssam.c
+@@ -1534,6 +1534,8 @@ ssam_send_event_to_session(struct spdk_ssam_session *smsession, spdk_ssam_sessio
+ 	} else {
+ 		SPDK_ERRLOG("[OFFLOAD_SNIC] smsession %s: internel error, events stuck too much\n",
+ 			    smsession->name);
++		free(ev_ctx);
++		return -1;
+ 	}
+ 
+ 	ev_ctx->start_tsc = spdk_get_ticks();
 -- 
 2.28.0.windows.1
 
