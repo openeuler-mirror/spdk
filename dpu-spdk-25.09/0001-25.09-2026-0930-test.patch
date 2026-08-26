@@ -1,7 +1,7 @@
-From 9f04d77ed8bd1b5dff2382f51cf200cd05665f5a Mon Sep 17 00:00:00 2001
+From e4a40979f90e9eaa6947dc5a343364f6bdf949b0 Mon Sep 17 00:00:00 2001
 From: liuziming1224 <liuziming7@huawei.com>
 Date: Mon, 10 Aug 2026 19:57:25 +0800
-Subject: [PATCH] spdk25.09 patch
+Subject: [PATCH 1/2] spdk25.09 patch
 
 ---
  CONFIG                                     |    3 +
@@ -14706,6 +14706,83 @@ index 000000000..e3ba93746
 +    except JSONRPCException as ex:
 +        print(ex.message)
 +        exit(1)
+-- 
+2.28.0.windows.1
+
+
+From c63ae446ed105f8e59fee8cf782e1a5f0f840f70 Mon Sep 17 00:00:00 2001
+From: l00958579 <linxinyi6@huawei.com>
+Date: Tue, 25 Aug 2026 19:38:42 +0800
+Subject: [PATCH 2/2] fix rbd bdev creation and multipath failure
+
+---
+ module/bdev/aio/bdev_aio.c | 18 ------------------
+ python/spdk/cli/bdev.py    |  2 +-
+ 2 files changed, 1 insertion(+), 19 deletions(-)
+
+diff --git a/module/bdev/aio/bdev_aio.c b/module/bdev/aio/bdev_aio.c
+index 454fbfb63..0abe5d48a 100644
+--- a/module/bdev/aio/bdev_aio.c
++++ b/module/bdev/aio/bdev_aio.c
+@@ -64,9 +64,6 @@ struct file_disk {
+ 	struct spdk_bdev	disk;
+ 	char			*filename;
+ 	int			fd;
+-#ifdef RWF_NOWAIT
+-	bool			use_nowait;
+-#endif
+ 	TAILQ_ENTRY(file_disk)  link;
+ 	bool			block_size_override;
+ 	bool			readonly;
+@@ -116,9 +113,6 @@ bdev_aio_open(struct file_disk *disk)
+ {
+ 	int fd;
+ 	int io_flag = disk->readonly ? O_RDONLY : O_RDWR;
+-#ifdef RWF_NOWAIT
+-	struct stat st;
+-#endif
+ 
+ 	fd = open(disk->filename, io_flag | O_DIRECT);
+ 	if (fd < 0) {
+@@ -134,13 +128,6 @@ bdev_aio_open(struct file_disk *disk)
+ 
+ 	disk->fd = fd;
+ 
+-#ifdef RWF_NOWAIT
+-	/* Some aio operations can block, for example if number outstanding
+-	 * I/O exceeds number of block layer tags. But not all files can
+-	 * support RWF_NOWAIT flag. So use RWF_NOWAIT on block devices only.
+-	 */
+-	disk->use_nowait = fstat(fd, &st) == 0 && S_ISBLK(st.st_mode);
+-#endif
+ 
+ 	return 0;
+ }
+@@ -219,11 +206,6 @@ bdev_aio_submit_io(enum spdk_bdev_io_type type, struct file_disk *fdisk,
+ 		io_set_eventfd(iocb, aio_ch->group_ch->efd);
+ 	}
+ 	iocb->data = aio_task;
+-#if defined(RWF_NOWAIT) && defined(SPDK_CONFIG_AIO_HAVE_RW_FLAGS)
+-	if (fdisk->use_nowait) {
+-		iocb->aio_rw_flags = RWF_NOWAIT;
+-	}
+-#endif
+ 	aio_task->len = nbytes;
+ 	aio_task->ch = aio_ch;
+ 
+diff --git a/python/spdk/cli/bdev.py b/python/spdk/cli/bdev.py
+index 78087110a..4a79459bd 100644
+--- a/python/spdk/cli/bdev.py
++++ b/python/spdk/cli/bdev.py
+@@ -869,7 +869,7 @@ def add_parser(subparsers):
+                                             block_size=args.block_size,
+                                             cluster_name=args.cluster_name,
+                                             uuid=args.uuid,
+-                                            read_only=args.read_only))
++                                            read_only=args.readonly))
+ 
+     p = subparsers.add_parser('bdev_rbd_create', help='Add a bdev with ceph rbd backend')
+     p.add_argument('-b', '--name', help="Name of the bdev")
 -- 
 2.28.0.windows.1
 
