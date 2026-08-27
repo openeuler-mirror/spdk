@@ -1,0 +1,73 @@
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (C) 2016 Intel Corporation
+#  All rights reserved.
+#  Copyright (c) 2022 Dell Inc, or its subsidiaries.
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+
+import argparse
+
+from spdk.rpc.cmd_parser import print_json
+
+
+def add_parser(subparsers):
+
+    def sock_impl_get_options(args):
+        print_json(args.client.sock_impl_get_options(impl_name=args.impl_name))
+
+    p = subparsers.add_parser('sock_impl_get_options', help="""Get options of socket layer implementation""")
+    p.add_argument('-i', '--impl', dest='impl_name',
+                   help='Socket implementation name (e.g. "posix", "ssl", "uring")', required=True)
+    p.set_defaults(func=sock_impl_get_options)
+
+    def sock_impl_set_options(args):
+        args.client.sock_impl_set_options(
+                                       impl_name=args.impl_name,
+                                       recv_buf_size=args.recv_buf_size,
+                                       send_buf_size=args.send_buf_size,
+                                       enable_recv_pipe=args.enable_recv_pipe,
+                                       enable_quickack=args.enable_quickack,
+                                       enable_placement_id=args.enable_placement_id,
+                                       enable_zerocopy_send_server=args.enable_zerocopy_send_server,
+                                       enable_zerocopy_send_client=args.enable_zerocopy_send_client,
+                                       zerocopy_threshold=args.zerocopy_threshold,
+                                       tls_version=args.tls_version,
+                                       enable_ktls=args.enable_ktls)
+
+    p = subparsers.add_parser('sock_impl_set_options', help="""Set options of socket layer implementation""")
+    p.add_argument('-i', '--impl', dest='impl_name',
+                   help='Socket implementation name (e.g. "posix", "ssl", "uring")', required=True)
+    p.add_argument('-r', '--recv-buf-size', help='Receive buffer size in bytes', type=int)
+    p.add_argument('-s', '--send-buf-size', help='Send buffer size in bytes', type=int)
+    p.add_argument('-p', '--enable-placement-id',
+                   help='Placement ID source: 0=disable, 1=incoming_napi, 2=incoming_cpu', type=int)
+    p.add_argument('--recv-pipe', dest='enable_recv_pipe', action=argparse.BooleanOptionalAction,
+                   help='Enable or disable receive pipe')
+    p.add_argument('--quickack', dest='enable_quickack', action=argparse.BooleanOptionalAction,
+                   help='Enable or disable quick ACK')
+    p.add_argument('--zerocopy-send-server', dest='enable_zerocopy_send_server', action=argparse.BooleanOptionalAction,
+                   help='Enable zero-copy on send for server sockets')
+    p.add_argument('--zerocopy-send-client', dest='enable_zerocopy_send_client', action=argparse.BooleanOptionalAction,
+                   help='Enable zero-copy on send for client sockets')
+    p.add_argument('--zerocopy-threshold',
+                   help='Send size threshold in bytes below which the zerocopy flag is omitted', type=int)
+    p.add_argument('--tls-version', help='TLS protocol version (e.g. 13 for TLS 1.3) (ssl only)', type=int)
+    p.add_argument('--ktls', dest='enable_ktls', action=argparse.BooleanOptionalAction,
+                   help='Enable Kernel TLS (ssl only). Default: false')
+    p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
+                   enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
+                   zerocopy_threshold=None, tls_version=None, enable_ktls=None)
+
+    def sock_set_default_impl(args):
+        print_json(args.client.sock_set_default_impl(impl_name=args.impl_name))
+
+    p = subparsers.add_parser('sock_set_default_impl', help="""Set the default sock implementation""")
+    p.add_argument('-i', '--impl', dest='impl_name',
+                   help='Socket implementation name (e.g. "posix", "ssl", "uring")', required=True)
+    p.set_defaults(func=sock_set_default_impl)
+
+    def sock_get_default_impl(args):
+        print_json(args.client.sock_get_default_impl())
+
+    p = subparsers.add_parser('sock_get_default_impl', help="Get the default sock implementation name")
+    p.set_defaults(func=sock_get_default_impl)
