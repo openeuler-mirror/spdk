@@ -170,7 +170,7 @@ def init_rpc_func():
     p = subparsers.add_parser('controller_clear_iostat',
                               help='Clear all controllers iostat', add_help=False)
     p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
-    p.add_argument('-t', '--type', help="Type of the controllers: blk, scsi", type=str, required=False)
+    p.add_argument('-t', '--type', help="Type of the controllers: blk, scsi, fs", type=str, required=False)
     p.set_defaults(func=controller_clear_iostat)
 
     @rpc.ssam.log_info
@@ -235,6 +235,58 @@ def init_rpc_func():
                               help='Show storage device pcie list', add_help=False)
     p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
     p.set_defaults(func=device_pcie_list)
+
+    @rpc.ssam.log_info
+    def fs_controller_create(args):
+        rpc.ssam.fs_controller_create(args.client,
+                                      dbdf=args.dbdf,
+                                      name=args.name,
+                                      fsdev_name=args.fsdev_name,
+                                      max_threads=args.max_threads)
+
+    p = subparsers.add_parser('fs_controller_create', help='Create a new fs controller', add_help=False)
+    p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
+    p.add_argument('dbdf', help='The pci dbdf of virtio fs controller', type=str)
+    p.add_argument('name', help='Name of fs controller', type=str)
+    p.add_argument('fsdev_name', help="Name of fsdev device", type=str)
+    p.add_argument('-t', '--max_threads', help="Max threads of fs controller", type=int, required=False)
+    p.set_defaults(func=fs_controller_create)
+
+    @rpc.ssam.log_info
+    def fs_controller_delete(args):
+        rpc.ssam.fs_controller_delete(args.client,
+                                      name=args.name,
+                                      force=args.force)
+
+    p = subparsers.add_parser('fs_controller_delete',
+                              help='Delete a fs controller', add_help=False)
+    p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
+    p.add_argument('name', help='Name of fs controller', type=str)
+    p.add_argument('-f', '--force', dest='force', action='store_true', help="Force to delete when io exists")
+    p.set_defaults(force=False)
+    p.set_defaults(func=fs_controller_delete)
+
+    @rpc.ssam.log_info
+    def fs_controller_list(args):
+        print_dict(rpc.ssam.fs_controller_list(args.client,
+                                               name=args.name))
+
+    p = subparsers.add_parser('fs_controller_list',
+                              help='Get fs_controller info', add_help=False)
+    p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
+    p.add_argument('-n', '--name', help='Name of controller', required=False)
+    p.set_defaults(func=fs_controller_list)
+
+    @rpc.ssam.log_info
+    def fs_device_iostat(args):
+        print_dict(rpc.ssam.fs_device_iostat(args.client,
+                                             name=args.name))
+
+    p = subparsers.add_parser('fs_device_iostat',
+                              help='Show iostat of fs device', add_help=False)
+    p.add_argument('-h', '--help',  action='help', help='Show this help message and exit')
+    p.add_argument('-n', '--name', help='Name of controller', type=str, required=False)
+    p.set_defaults(func=fs_device_iostat)
 
     @rpc.ssam.log_info
     def get_ssam_info(args):

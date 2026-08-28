@@ -54,6 +54,7 @@
 
 #define SPDK_SESSION_TYPE_BLK   "blk"
 #define SPDK_SESSION_TYPE_SCSI  "scsi"
+#define SPDK_SESSION_TYPE_FS    "fs"
 
 #define SSAM_SHM "ssam_shm"
 #define SSAM_SHM_PERMIT 0640
@@ -63,6 +64,7 @@ enum virtio_type {
 	VIRTIO_TYPE_UNKNOWN = 0,
 	VIRTIO_TYPE_BLK     = (1U << 0),
 	VIRTIO_TYPE_SCSI    = (1U << 1),
+	VIRTIO_TYPE_FS      = (1U << 2),
 };
 
 /**
@@ -159,6 +161,8 @@ typedef void (*spdk_ssam_session_cpl_fn)(struct spdk_ssam_session *smsession, vo
  */
 typedef void (*spdk_ssam_session_rsp_fn)(void *arg, int rsp);
 
+typedef void (*ssam_fs_add_fsdev_cpl_cb)(void *cb_arg, int status);
+
 struct spdk_ssam_session_reg_info {
 	char type_name[SPDK_SESSION_TYPE_MAX_LEN];
 	spdk_ssam_session_rsp_fn rsp_fn;
@@ -170,6 +174,14 @@ struct spdk_ssam_session_reg_info {
 	uint32_t session_ctx_size;
 	char *name;
 	char *dbdf;
+};
+
+struct ssam_fs_construct_info {
+	uint16_t gfunc_id;
+	uint16_t max_threads;
+	char *dbdf;
+	char *name;
+	char *fsdev_name;
 };
 
 /**
@@ -235,5 +247,11 @@ int ssam_init_device_pcie_list(void);
 void ssam_dump_device_pcie_list(struct spdk_json_write_ctx *w);
 
 uint32_t ssam_get_device_pcie_list_size(void);
+
+int ssam_fs_construct(struct ssam_fs_construct_info *info, void *request, 
+	spdk_ssam_session_rsp_fn rpc_ssam_send_response_cb);
+
+int ssam_fs_destory(char *name, bool force, void *request,
+	spdk_ssam_session_rsp_fn rpc_ssam_send_response_cb);
 
 #endif /* SSAM_H */

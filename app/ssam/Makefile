@@ -11,8 +11,8 @@ APP = ssam
 
 C_SRCS := ssam.c
 
-SYS_LIBS += -lcap
-SPDK_LIB_LIST = $(ALL_MODULES_LIST) event_ssam event ssam
+SYS_LIBS += -lcap -lfuse3
+SPDK_LIB_LIST = $(ALL_MODULES_LIST) event_ssam event_fsdev event ssam fuse_dispatcher
 
 ifeq ($(OS),Linux)
 SPDK_LIB_LIST += event_nbd

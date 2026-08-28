@@ -242,6 +242,68 @@ def device_pcie_list(client):
 
     return client.call('device_pcie_list')
 
+
+def fs_controller_create(client, dbdf, name, fsdev_name, max_threads=None):
+    """Create ssam fs controller.
+    Args:
+        dbdf: the pci dbdf of virtio fs controller
+        name: fs controller name
+        fsdev_name: fsdev device name
+        max_threads: max threads of fs controller
+    """
+    params = {
+        'dbdf': dbdf,
+        'name': name,
+        'fsdev_name': fsdev_name,
+    }
+    if max_threads is not None:
+        params['max_threads'] = max_threads
+
+    return client.call('fs_controller_create', params)
+
+
+def fs_controller_delete(client, name, force):
+    """Delete ssam fs controller.
+    Args:
+        name: fs controller name
+        force: if force delete controller
+    """
+    params = {
+        'name': name,
+        'force': force,
+    }
+    return client.call('fs_controller_delete', params)
+
+
+def fs_controller_list(client, name=None):
+    """Get information about configured fs controllers.
+
+    Args:
+        name: name of fs controller
+
+    Returns:
+        List of ssam fs controllers.
+    """
+    params = {}
+    if name is not None:
+        params['name'] = name
+    return client.call('fs_controller_list', params)
+
+
+def fs_device_iostat(client, name=None):
+    """Get iostat about fs device.
+
+    Args:
+        name: controller name
+
+    Returns:
+        List of iostat of ssam fs controllers.
+    """
+    params = {}
+    if name is not None:
+        params['name'] = name
+    return client.call('fs_device_iostat', params)
+
 def get_ssam_info(client):
     """Get information.
 

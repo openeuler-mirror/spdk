@@ -14,6 +14,8 @@
 #include "ssam_config.h"
 #include "rte_malloc.h"
 
+#include "ssam_fs_internal.h"
+
 static int ssam_rpc_get_gfunc_id_by_dbdf(char *dbdf, uint16_t *gfunc_id);
 
 struct rpc_ssam_blk_ctrlr {
@@ -301,6 +303,7 @@ rpc_ssam_delete_controller(struct spdk_jsonrpc_request *request,
 	uint16_t gfunc_id = SPDK_INVALID_GFUNC_ID;
 	struct spdk_ssam_session *smsession;
 	int rc;
+	enum ssam_device_type type;
 
 	if (params == NULL) {
 		SPDK_ERRLOG("rpc_ssam_delete_controller params null\n");
@@ -319,6 +322,12 @@ rpc_ssam_delete_controller(struct spdk_jsonrpc_request *request,
 	gfunc_id = rpc_ssam_get_gfunc_id_by_index(req.index);
 	rc = ssam_rpc_para_check(gfunc_id);
 	if (rc != 0) {
+		goto invalid;
+	}
+
+	type = ssam_get_virtio_type(gfunc_id);
+	if (type == SSAM_DEVICE_VIRTIO_FS) {
+		SPDK_ERRLOG("should use fs_controller_delte to delete fs_controller\n");
 		goto invalid;
 	}
 
@@ -561,6 +570,106 @@ rpc_ssam_show_scsi_controllers(struct spdk_jsonrpc_request *request, uint16_t gf
 			}
 			smsession = ssam_sessions_next(smdev->smsessions, smsession);
 		}
+		smdev = ssam_dev_next(smdev);
+	}
+	ssam_unlock();
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+	return 0;
+}
+
+static int
+rpc_ssam_show_fs_controllers(struct spdk_jsonrpc_request *request, uint16_t gfunc_id)
+{
+	struct spdk_ssam_dev *smdev = NULL;
+	struct spdk_json_write_ctx *w = NULL;
+	struct spdk_ssam_session *smsession = NULL;
+
+	ssam_lock();
+	if (gfunc_id != SPDK_INVALID_GFUNC_ID) {
+		smsession = ssam_session_find(gfunc_id);
+		if (smsession == NULL) {
+			ssam_unlock();
+			return -ENODEV;
+		}
+
+		w = spdk_jsonrpc_begin_result(request);
+		spdk_json_write_array_begin(w);
+
+		smdev = ssam_dev_next(NULL);
+		while (smdev != NULL) {
+			bool is_smsession_exit = 0;
+			smsession = ssam_sessions_next(smdev->smsessions, NULL);
+			while (smsession != NULL) {
+				if (smsession->backend->type == VIRTIO_TYPE_FS && smsession->gfunc_id == gfunc_id) {
+					if (is_smsession_exit == 0) {
+						is_smsession_exit = 1;
+						spdk_json_write_object_begin(w);
+						spdk_json_write_named_string(w, "ctrlr", ssam_dev_get_name(smdev));
+						spdk_json_write_named_string_fmt(w, "cpumask", "0x%s",
+										 spdk_cpuset_fmt(spdk_thread_get_cpumask(smdev->thread)));
+						spdk_json_write_named_uint32(w, "session_num", (uint32_t)smdev->active_session_num);
+						spdk_json_write_named_object_begin(w, "backend_specific");
+						spdk_json_write_named_array_begin(w, "session");
+					}
+					smsession->backend->dump_info_json(smsession, w);
+				}
+				smsession = ssam_sessions_next(smdev->smsessions, smsession);
+			}
+			if (is_smsession_exit == 0) {
+				smdev = ssam_dev_next(smdev);
+				continue;
+			}
+			if (is_smsession_exit == 1) {
+				spdk_json_write_array_end(w);
+				spdk_json_write_object_end(w);
+				spdk_json_write_object_end(w);
+			}
+			smdev = ssam_dev_next(smdev);
+		}
+
+		ssam_unlock();
+		spdk_json_write_array_end(w);
+		spdk_jsonrpc_end_result(request, w);
+		return 0;
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	smdev = ssam_dev_next(NULL);
+	while (smdev != NULL) {
+		bool is_smsession_exit = 0;
+		smsession = ssam_sessions_next(smdev->smsessions, NULL);
+		while (smsession != NULL) {
+			if (smsession->backend->type == VIRTIO_TYPE_FS) {
+				is_smsession_exit = 1;
+				break;
+			}
+			smsession = ssam_sessions_next(smdev->smsessions, smsession);
+		}
+		if (is_smsession_exit == 0) {
+			smdev = ssam_dev_next(smdev);
+			continue;
+		}
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string(w, "ctrlr", ssam_dev_get_name(smdev));
+		spdk_json_write_named_string_fmt(w, "cpumask", "0x%s",
+						 spdk_cpuset_fmt(spdk_thread_get_cpumask(smdev->thread)));
+		spdk_json_write_named_uint32(w, "session_num", (uint32_t)smdev->active_session_num);
+		spdk_json_write_named_object_begin(w, "backend_specific");
+		spdk_json_write_named_array_begin(w, "session");
+		smsession = ssam_sessions_next(smdev->smsessions, NULL);
+		while (smsession != NULL) {
+			if (smsession->backend->type == VIRTIO_TYPE_FS) {
+				smsession->backend->dump_info_json(smsession, w);
+			}
+			smsession = ssam_sessions_next(smdev->smsessions, smsession);
+		}
+		spdk_json_write_array_end(w);
+		spdk_json_write_object_end(w);
+		spdk_json_write_object_end(w);
 		smdev = ssam_dev_next(smdev);
 	}
 	ssam_unlock();
@@ -903,7 +1012,9 @@ rpc_ssam_controller_clear_iostat(struct spdk_jsonrpc_request *request,
 	}
 
 	if (req.type != NULL) {
-		if (strcmp(req.type, SPDK_SESSION_TYPE_SCSI) == 0) {
+		if (strcmp(req.type, SPDK_SESSION_TYPE_FS) == 0) {
+			typenum = VIRTIO_TYPE_FS;
+		} else if (strcmp(req.type, SPDK_SESSION_TYPE_SCSI) == 0) {
 			typenum = VIRTIO_TYPE_SCSI;
 		} else if (strcmp(req.type, SPDK_SESSION_TYPE_BLK) == 0) {
 			typenum = VIRTIO_TYPE_BLK;
@@ -1687,6 +1798,323 @@ rpc_ssam_device_pcie_list(struct spdk_jsonrpc_request *request,
 }
 
 SPDK_RPC_REGISTER("device_pcie_list", rpc_ssam_device_pcie_list, SPDK_RPC_RUNTIME)
+
+struct rpc_fs_controller_create {
+	char *dbdf;
+	char *name;
+	char *fsdev_name;
+	uint16_t max_threads;
+};
+
+static const struct spdk_json_object_decoder g_rpc_fs_controller_create[] = {
+	{"dbdf", offsetof(struct rpc_fs_controller_create, dbdf), spdk_json_decode_string},
+	{"name", offsetof(struct rpc_fs_controller_create, name), spdk_json_decode_string},
+	{"fsdev_name", offsetof(struct rpc_fs_controller_create, fsdev_name), spdk_json_decode_string},
+	{"max_threads", offsetof(struct rpc_fs_controller_create, max_threads), spdk_json_decode_uint16, true},
+};
+
+static void
+free_rpc_ssam_fs_controller_create(struct rpc_fs_controller_create *req)
+{
+	if (req->dbdf != NULL) {
+		free(req->dbdf);
+		req->dbdf = NULL;
+	}
+	if (req->name != NULL) {
+		free(req->name);
+		req->name = NULL;
+	}
+	if (req->fsdev_name != NULL) {
+		free(req->fsdev_name);
+		req->fsdev_name = NULL;
+	}
+}
+
+static void
+rpc_ssam_fs_controller_create(struct spdk_jsonrpc_request *request,
+			      const struct spdk_json_val *params)
+{
+	struct ssam_fs_construct_info info = {
+		.gfunc_id = SPDK_INVALID_GFUNC_ID,
+		.dbdf = NULL,
+		.name = NULL,
+		.fsdev_name = NULL,
+		.max_threads = SSAM_FS_DEFAULT_THREADS,
+	};
+	struct rpc_fs_controller_create req = {
+		.max_threads = SPDK_INVALID_MAX_THREADS,
+	};
+	int rc;
+
+	if (params == NULL) {
+		SPDK_ERRLOG("rpc_ssam_fs_controller_create params null\n");
+		rc = -EINVAL;
+		goto invalid;
+	}
+
+	rc = spdk_json_decode_object(params, g_rpc_fs_controller_create,
+				     SPDK_COUNTOF(g_rpc_fs_controller_create), &req);
+	if (rc != 0) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		rc = -EINVAL;
+		goto invalid;
+	}
+
+	rc = ssam_rpc_para_check_name(req.name);
+	if (rc != 0) {
+		SPDK_ERRLOG("controller name(%s) is existed\n", req.name);
+		goto invalid;
+	}
+
+	rc = ssam_rpc_get_gfunc_id_by_dbdf(req.dbdf, &info.gfunc_id);
+	if (rc != 0) {
+		goto invalid;
+	}
+
+	rc = ssam_rpc_para_check_type(info.gfunc_id, SSAM_DEVICE_VIRTIO_FS);
+	if (rc != 0) {
+		goto invalid;
+	}
+
+	info.dbdf = req.dbdf;
+	info.name = req.name;
+	info.fsdev_name = req.fsdev_name;
+	if (req.max_threads != SPDK_INVALID_MAX_THREADS) {
+		if (req.max_threads == 0 || req.max_threads > ssam_get_core_num()) {
+			SPDK_ERRLOG("max_threads out of range, should bewteen 1 and %u.\n", ssam_get_core_num());
+			rc = -ERANGE;
+			goto invalid;
+		}
+		info.max_threads = req.max_threads;
+	}
+	rc = ssam_fs_construct(&info, request, rpc_ssam_send_response_cb);
+	if (rc != 0) {
+		SPDK_ERRLOG("contruct fs controller failed.\n");
+		goto invalid;
+	}
+
+	free_rpc_ssam_fs_controller_create(&req);
+	return;
+
+invalid:
+	free_rpc_ssam_fs_controller_create(&req);
+	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+					 spdk_strerror(-rc));
+	return;
+}
+
+SPDK_RPC_REGISTER("fs_controller_create", rpc_ssam_fs_controller_create, SPDK_RPC_RUNTIME)
+
+struct rpc_fs_controller_delete {
+	char *name;
+	bool force;
+};
+
+static const struct spdk_json_object_decoder g_rpc_fs_controller_delete[] = {
+	{"name", offsetof(struct rpc_fs_controller_delete, name), spdk_json_decode_string},
+	{"force", offsetof(struct rpc_fs_controller_delete, force), spdk_json_decode_bool},
+};
+
+static void
+free_rpc_ssam_fs_controller_delete(struct rpc_fs_controller_delete *req)
+{
+	if (req->name != NULL) {
+		free(req->name);
+		req->name = NULL;
+	}
+}
+
+static void
+rpc_ssam_fs_controller_delete(struct spdk_jsonrpc_request *request,
+			      const struct spdk_json_val *params)
+{
+	struct rpc_fs_controller_delete req = {0};
+	int rc;
+
+	if (params == NULL) {
+		SPDK_ERRLOG("rpc_ssam_fs_controller_delete params null\n");
+		rc = -EINVAL;
+		goto invalid;
+	}
+
+	rc = spdk_json_decode_object(params, g_rpc_fs_controller_delete,
+				     SPDK_COUNTOF(g_rpc_fs_controller_delete), &req);
+	if (rc != 0) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		rc = -EINVAL;
+		goto invalid;
+	}
+
+	rc = ssam_fs_destory(req.name, req.force, request, rpc_ssam_send_response_cb);
+	if (rc != 0) {
+		goto invalid;
+	}
+
+	free_rpc_ssam_fs_controller_delete(&req);
+	return;
+
+invalid:
+	free_rpc_ssam_fs_controller_delete(&req);
+	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+					 spdk_strerror(-rc));
+}
+
+SPDK_RPC_REGISTER("fs_controller_delete", rpc_ssam_fs_controller_delete, SPDK_RPC_RUNTIME)
+
+struct rpc_fs_controller_list {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder g_rpc_fs_controller_list[] = {
+	{"name", offsetof(struct rpc_fs_controller_list, name), spdk_json_decode_string, true},
+};
+
+static void
+free_rpc_ssam_fs_controller_list(struct rpc_fs_controller_list *req)
+{
+	if (req->name != NULL) {
+		free(req->name);
+		req->name = NULL;
+	}
+}
+
+static void
+rpc_ssam_fs_controller_list(struct spdk_jsonrpc_request *request,
+			    const struct spdk_json_val *params)
+{
+	struct rpc_fs_controller_list req = {
+		.name = NULL,
+	};
+	uint16_t gfunc_id = SPDK_INVALID_GFUNC_ID;
+	int rc;
+
+	if (params != NULL) {
+		rc = spdk_json_decode_object(params, g_rpc_fs_controller_list,
+					     SPDK_COUNTOF(g_rpc_fs_controller_list), &req);
+		if (rc != 0) {
+			SPDK_ERRLOG("spdk_json_decode_object failed\n");
+			rc = -EINVAL;
+			goto invalid;
+		}
+	}
+
+	if (req.name != NULL) {
+		gfunc_id = ssam_get_gfunc_id_by_name(req.name);
+		rc = ssam_rpc_para_check(gfunc_id);
+		if (rc != 0) {
+			goto invalid;
+		}
+	}
+
+	rc = rpc_ssam_show_fs_controllers(request, gfunc_id);
+	if (rc != 0) {
+		goto invalid;
+	}
+
+	free_rpc_ssam_fs_controller_list(&req);
+	return;
+
+invalid:
+	free_rpc_ssam_fs_controller_list(&req);
+	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+					 spdk_strerror(-rc));
+	return;
+}
+
+SPDK_RPC_REGISTER("fs_controller_list", rpc_ssam_fs_controller_list, SPDK_RPC_RUNTIME)
+
+struct rpc_controller_get_fs_iostat {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder g_rpc_controller_get_fs_iostat_decoder[] = {
+	{"name", offsetof(struct rpc_controller_get_fs_iostat, name), spdk_json_decode_string, true},
+};
+
+static void
+free_rpc_ssam_controller_get_fs_iostat(struct rpc_controller_get_fs_iostat *req)
+{
+	if (req->name != NULL) {
+		free(req->name);
+		req->name = NULL;
+	}
+}
+
+static int
+rpc_ssam_show_fs_iostat(struct spdk_jsonrpc_request *request, uint16_t gfunc_id)
+{
+	struct spdk_ssam_dev *smdev = NULL;
+	struct spdk_json_write_ctx *w = NULL;
+	struct spdk_ssam_session *smsession = NULL;
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_array_begin(w, "fs_controllers");
+	ssam_lock();
+
+	smdev = ssam_dev_next(NULL);
+	while (smdev != NULL) {
+		smsession = ssam_sessions_next(smdev->smsessions, NULL);
+		while (smsession != NULL) {
+			if (smsession->backend->show_iostat_json != NULL && smsession->backend->type == VIRTIO_TYPE_FS &&
+			    (gfunc_id == SPDK_INVALID_GFUNC_ID || smsession->gfunc_id == gfunc_id)) {
+				smsession->backend->show_iostat_json(smsession, SPDK_SSAM_SCSI_CTRLR_MAX_DEVS, w);
+			}
+			smsession = ssam_sessions_next(smdev->smsessions, smsession);
+		}
+		smdev = ssam_dev_next(smdev);
+	}
+
+	ssam_unlock();
+	spdk_json_write_array_end(w);
+	spdk_json_write_object_end(w);
+	spdk_jsonrpc_end_result(request, w);
+	return 0;
+}
+
+static void
+rpc_ssam_controller_get_fs_iostat(struct spdk_jsonrpc_request *request,
+				  const struct spdk_json_val *params)
+{
+	struct rpc_controller_get_fs_iostat req = {
+		.name = NULL,
+	};
+	uint16_t gfunc_id = SPDK_INVALID_GFUNC_ID;
+	int rc;
+
+	if (params != NULL) {
+		rc = spdk_json_decode_object(params, g_rpc_controller_get_fs_iostat_decoder,
+					     SPDK_COUNTOF(g_rpc_controller_get_fs_iostat_decoder), &req);
+		if (rc != 0) {
+			SPDK_ERRLOG("spdk_json_decode_object failed\n");
+			rc = -EINVAL;
+			goto invalid;
+		}
+	}
+
+	if (req.name != NULL) {
+		gfunc_id = ssam_get_gfunc_id_by_name(req.name);
+		rc = ssam_rpc_para_check(gfunc_id);
+		if (rc != 0) {
+			goto invalid;
+		}
+	}
+
+	rc = rpc_ssam_show_fs_iostat(request, gfunc_id);
+	if (rc != 0) {
+		goto invalid;
+	}
+
+	free_rpc_ssam_controller_get_fs_iostat(&req);
+	return;
+
+invalid:
+	free_rpc_ssam_controller_get_fs_iostat(&req);
+	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+					 spdk_strerror(-rc));
+	return;
+}
+SPDK_RPC_REGISTER("fs_device_iostat", rpc_ssam_controller_get_fs_iostat, SPDK_RPC_RUNTIME)
 
 static void 
 _rpc_get_ssam_info(struct spdk_json_write_ctx *w, struct spdk_ssam_dev *smdev)

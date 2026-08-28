@@ -745,7 +745,11 @@ static int
 ssam_init_session_fields(struct spdk_ssam_session_reg_info *info,
 			 struct spdk_ssam_dev *smdev, struct spdk_ssam_session *smsession)
 {
-	smsession->mp = g_ssam_info.mp[smdev->tid % ssam_get_core_num()];
+	if (info->backend->type == VIRTIO_TYPE_FS) {
+		smsession->mp = ssam_get_fs_mp(info->gfunc_id);
+	} else {
+		smsession->mp = g_ssam_info.mp[smdev->tid % ssam_get_core_num()];
+	}
 	smsession->initialized = true;
 	smsession->registered = true;
 	smsession->thread = smdev->thread;
@@ -847,9 +851,11 @@ ssam_session_register(struct spdk_ssam_session_reg_info *info,
 	struct spdk_ssam_dev *smdev = NULL;
 	int rc;
 
-	if (ssam_session_find(info->gfunc_id)) {
-		SPDK_ERRLOG("Session with function id %d already exists.\n", info->gfunc_id);
-		return -EEXIST;
+	if (strcmp(info->type_name, SPDK_SESSION_TYPE_FS) != 0) {
+		if (ssam_session_find(info->gfunc_id)) {
+			SPDK_ERRLOG("Session with function id %d already exists.\n", info->gfunc_id);
+			return -EEXIST;
+		}
 	}
 
 	smdev = ssam_dev_find(info->tid);
@@ -1158,8 +1164,9 @@ ssam_dev_request_worker(void *arg)
 		 */
 		if (spdk_unlikely(smdev->io_wait_r_cnt > 0)) {
 			ssam_io_wait_r_queue_handle(smdev);
+			return SPDK_POLLER_BUSY;
 		}
-		return SPDK_POLLER_BUSY;
+		return SPDK_POLLER_IDLE;
 	}
 
 	if (spdk_unlikely(smdev->io_wait_r_cnt > 0)) {
@@ -1269,14 +1276,14 @@ ssam_dev_response_worker(void *arg)
 	}
 	if (io_num <= 0 || io_num > SSAM_MAX_RESP_POLL_SIZE) {
 		ssam_dev_io_stuck_check(smdev);
-		return SPDK_POLLER_BUSY;
+		return SPDK_POLLER_IDLE;
 	}
 
 	if (smdev->io_num < ((uint64_t)(uint32_t)io_num)) {
 		SPDK_ERRLOG("%s: DMA response IO num too much, should be %lu but %d\n",
 			    smdev->name, smdev->io_num, io_num);
 		smdev->discard_io_num += io_num;
-		return SPDK_POLLER_BUSY;
+		return SPDK_POLLER_IDLE;
 	}
 	smdev->io_stuck_tsc = spdk_get_ticks();
 
@@ -1346,7 +1353,7 @@ ssam_dev_stop_poller(void *arg)
 	/* special processing is required for virtio-scsi,
 	 * because In scsi scenarios, smsessions are not actively or passively removed.
 	 */
-	if (smdev->type == VIRTIO_TYPE_SCSI && smdev->active_session_num > 0) {
+	if ((smdev->type & (VIRTIO_TYPE_SCSI | VIRTIO_TYPE_FS)) != 0 && smdev->active_session_num > 0) {
 		for (int i = 0; i < SSAM_MAX_SESSION_PER_DEV; i++) {
 			if (smdev->smsessions[i] != NULL) {
 				smsession = smdev->smsessions[i];
@@ -1665,6 +1672,8 @@ spdk_ssam_subsystem_fini(ssam_fini_cb fini_cb)
 	g_ssam_fini_cpl_cb = fini_cb;
 
 	ssam_session_shutdown(NULL);
+
+	spdk_ssam_fs_poller_destroy();
 }
 
 void
@@ -1833,10 +1842,18 @@ ssam_init(void)
 		return rc;
 	}
 
+	rc = spdk_ssam_fs_poller_init();
+	if (rc != 0) {
+		ssam_server_exit();
+		ssam_config_exit();
+		return rc;
+	}
+
 	rc = ssam_smdev_init();
 	if (rc != 0) {
 		ssam_server_exit();
 		ssam_config_exit();
+		spdk_ssam_fs_poller_destroy();
 	}
 
 	return rc;

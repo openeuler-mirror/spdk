@@ -13,7 +13,8 @@ CFLAGS += -I. -I../../dpdk/lib/eal/common
 CFLAGS += $(ENV_CFLAGS)
 
 C_SRCS = ssam.c ssam_blk.c ssam_rpc.c \
-	ssam_config.c ssam_scsi.c ssam_malloc.c ssam_device_pcie.c
+	ssam_config.c ssam_scsi.c ssam_malloc.c ssam_device_pcie.c \
+	ssam_fs.c
 C_SRCS += ssam_driver/ssam_driver.c
 C_SRCS += ssam_driver/ssam_dbdf.c
 C_SRCS += ssam_driver/ssam_mempool.c

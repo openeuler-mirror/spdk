@@ -510,6 +510,10 @@ int ssam_free_ex(void *addr);
  */
 int ssam_malloc_elem_from_addr(const void *data, unsigned long long *pg_size, int *socket_id);
 
+int spdk_ssam_fs_poller_init(void);
+
+void spdk_ssam_fs_poller_destroy(void);
+
 /*
  * Set io crc check status.
  *

@@ -15,15 +15,18 @@
 /* dma queue must be 1 with 15 core */
 #define SSAM_DEFAULT_DMA_QUEUE_NUM       1
 #define SSAM_DEFAULT_MEMPOOL_SIZE        1024
+#define SSAM_DEFAULT_FS_MEMPOOL_SIZE     256
 #define SSAM_MAX_DMA_QUEUE_NUM           4
 #define SPDK_SSAM_VIRTIO_BLK_DEFAULT_FEATURE     0x3f11001046
 #define SPDK_SSAM_VIRTIO_SCSI_DEFAULT_FEATURE    0x3f11000007
+#define SPDK_SSAM_VIRTIO_FS_DEFAULT_FEATURE      0x3f19000000
 
 struct ssam_user_config {
 	uint32_t mempool_size;
 	uint32_t queues;
 	uint32_t extra_size;
 	uint32_t dma_queue_num;
+	uint32_t fs_mempool_size;
 };
 
 struct ssam_config {
@@ -31,6 +34,12 @@ struct ssam_config {
 	struct ssam_hostep_info ep_info;
 	uint32_t core_num;
 	bool shm_created;
+	bool virtio_fs_enable;
+};
+
+struct ssam_fs_config {
+	uint16_t queue_id;
+	ssam_mempool_t *mp;
 };
 
 static struct ssam_config g_ssam_config;
@@ -143,6 +152,12 @@ ssam_get_queues(void)
 	return cfg_queues;
 }
 
+bool
+ssam_get_virtio_fs_enable(void)
+{
+	return g_ssam_config.virtio_fs_enable;
+}
+
 enum ssam_device_type
 ssam_get_virtio_type(uint16_t gfunc_id) {
 	uint16_t vf_start, vf_end;
@@ -218,6 +233,81 @@ ssam_get_virtio_scsi_config(struct ssam_virtio_config *cfg)
 	return;
 }
 
+static struct ssam_fs_config g_ssam_fs_config_map[SSAM_HOSTEP_NUM_MAX];
+
+uint16_t
+ssam_get_queue_id(uint32_t func_id)
+{
+	if (func_id >= SSAM_HOSTEP_NUM_MAX) {
+		return 0;
+	}
+	return g_ssam_fs_config_map[func_id].queue_id;
+}
+
+ssam_mempool_t *
+ssam_get_fs_mp(uint32_t func_id)
+{
+	if (func_id >= SSAM_HOSTEP_NUM_MAX) {
+		return 0;
+	}
+	return g_ssam_fs_config_map[func_id].mp;
+}
+
+static int
+ssam_virtio_fs_config_init(struct ssam_hostep_info *ep_info)
+{
+	int rc = 0;
+	uint32_t i;
+	uint16_t queue_id;
+	struct ssam_pf_list *pf = ep_info->host_pf_list;
+
+	for (i = 0; i < SSAM_HOSTEP_NUM_MAX; i++) {
+		if (pf[i].pf_funcid == UINT16_MAX || pf[i].pf_type != SSAM_DEVICE_VIRTIO_FS) {
+			continue;
+		}
+		rc = ssam_vmio_rxq_create(&queue_id);
+		if (rc < 0) {
+			SPDK_ERRLOG("Failed to create vmio rx queue: %d\n", rc);
+			return -1;
+		}
+		g_ssam_fs_config_map[pf[i].pf_funcid].queue_id = queue_id;
+		g_ssam_fs_config_map[pf[i].pf_funcid].mp =
+			ssam_mempool_create(g_ssam_config.user_config.fs_mempool_size * SSAM_MB,
+					    SSAM_DEFAULT_MEMPOOL_EXTRA_SIZE);
+		if (g_ssam_fs_config_map[pf[i].pf_funcid].mp == NULL) {
+			SPDK_ERRLOG("ssam create fs mempool failed, mempool_size = %uMB.\n",
+				    g_ssam_config.user_config.fs_mempool_size);
+			return -ENOMEM;
+		}
+		g_ssam_config.virtio_fs_enable = true;
+	}
+
+	return 0;
+}
+
+static int
+ssam_get_virtio_fs_config(struct ssam_virtio_config *cfg, uint32_t func_id)
+{
+	int ret = 0;
+	uint32_t *buf = (uint32_t *)cfg->device_config;
+
+	cfg->device_feature = SPDK_SSAM_VIRTIO_FS_DEFAULT_FEATURE;
+	cfg->queue_num = g_ssam_config.user_config.queues;
+	cfg->queue_size = VIRITO_FS_DEFAULT_QUEUE_SIZE;
+	cfg->rx_queue_id = ssam_get_queue_id(func_id);
+	cfg->config_len = VIRTIO_FS_DEFAULT_CONFIG_LEN;
+
+	memset(buf, 0, sizeof(cfg->device_config));
+	ret = snprintf((char *)buf, VIRTIO_FS_DEFAULT_TAG_LEN, "FS_%u", func_id);
+	if (ret < 0 || ret >= VIRTIO_FS_DEFAULT_TAG_LEN) {
+		SPDK_ERRLOG("Failed to init tag of func_id: %u\n", func_id);
+		return -EINVAL;
+	}
+	*(buf + VIRTIO_FS_DEFAULT_CONFIG_QUEUE_OFFSET) = g_ssam_config.user_config.queues;
+
+	return 0;
+}
+
 static int
 ssam_virtio_config_get(struct ssam_pf_list *pf, struct ssam_function_config *cfg)
 {
@@ -231,6 +321,12 @@ ssam_virtio_config_get(struct ssam_pf_list *pf, struct ssam_function_config *cfg
 		break;
 	case SSAM_DEVICE_VIRTIO_SCSI:
 		ssam_get_virtio_scsi_config(&cfg->virtio_config);
+		break;
+	case SSAM_DEVICE_VIRTIO_FS:
+		ret = ssam_get_virtio_fs_config(&cfg->virtio_config, cfg->gfunc_id);
+		if (ret != 0) {
+			return ret;
+		}
 		break;
 	default: {
 		SPDK_ERRLOG("function config init fail (%d|%d)\n", cfg->gfunc_id, cfg->type);
@@ -354,6 +450,12 @@ ssam_virtio_init(void)
 		return rc;
 	}
 
+	rc = ssam_virtio_fs_config_init(ep_info);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to init virtio fs config:%s\n", spdk_strerror(-rc));
+		return rc;
+	}
+
 	rc = ssam_virtio_config_init(ep_info);
 	if (rc != 0) {
 		SPDK_ERRLOG("ssam virtio device init failed:%s\n", spdk_strerror(-rc));
@@ -374,17 +476,28 @@ spdk_ssam_user_config_init(void)
 	user_config->queues = SPDK_SSAM_DEFAULT_VQUEUES;
 	user_config->dma_queue_num = SSAM_DEFAULT_DMA_QUEUE_NUM;
 	user_config->mempool_size = SSAM_DEFAULT_MEMPOOL_SIZE;
+	user_config->fs_mempool_size = SSAM_DEFAULT_FS_MEMPOOL_SIZE;
 	user_config->extra_size = SSAM_DEFAULT_MEMPOOL_EXTRA_SIZE;
+	g_ssam_config.virtio_fs_enable = false;
 }
 
 static void
 ssam_virtio_exit(void)
 {
 	int rc;
+	int i;
 
 	rc = ssam_lib_exit();
 	if (rc != 0) {
 		SPDK_WARNLOG("ssam lib exit failed\n");
+	}
+
+	for (i = 0; i < SSAM_HOSTEP_NUM_MAX; i++) {
+		if (g_ssam_fs_config_map[i].mp != NULL) {
+			ssam_mempool_destroy(g_ssam_fs_config_map[i].mp);
+			g_ssam_fs_config_map[i].mp = NULL;
+			ssam_update_virtio_device_used(i, 0);
+		}
 	}
 }
 
