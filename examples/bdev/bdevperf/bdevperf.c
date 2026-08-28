@@ -2118,9 +2118,10 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 
 	g_construct_job_count++;
 
-	spdk_thread_send_msg(thread, _bdevperf_construct_job, job);
+	rc = spdk_thread_send_msg(thread, _bdevperf_construct_job, job);
+	assert(rc == 0);
 
-	return 0;
+	return rc;
 }
 
 static int

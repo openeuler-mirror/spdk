@@ -9,7 +9,8 @@
 #include "spdk/config.h"
 
 #ifdef SPDK_CONFIG_ISAL
-#include "spdk/isa-l.h"
+#define SPDK_HAVE_ISAL
+#include <isa-l/include/crc.h>
 #elif defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
 #define SPDK_HAVE_ARM_CRC
 #include <arm_acle.h>

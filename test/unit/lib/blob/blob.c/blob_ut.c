@@ -178,30 +178,6 @@ blob_op_complete(void *cb_arg, int bserrno)
 	g_bserrno = bserrno;
 }
 
-int g_bserrno_io0;
-static void
-blob_op_complete_io0(void *cb_arg, int bserrno)
-{
-	if (cb_arg != NULL) {
-		int *errp = cb_arg;
-
-		*errp = bserrno;
-	}
-	g_bserrno_io0 = bserrno;
-}
-
-int g_bserrno_io1;
-static void
-blob_op_complete_io1(void *cb_arg, int bserrno)
-{
-	if (cb_arg != NULL) {
-		int *errp = cb_arg;
-
-		*errp = bserrno;
-	}
-	g_bserrno_io1 = bserrno;
-}
-
 static void
 blob_op_with_id_complete(void *cb_arg, spdk_blob_id blobid, int bserrno)
 {
@@ -3208,8 +3184,7 @@ bs_grow_live_no_space(void)
 	struct spdk_bs_opts opts;
 	struct spdk_bs_md_mask mask;
 	uint64_t bdev_size_init;
-	uint64_t total_data_clusters;
-	uint64_t beyond_max_growable_size;
+	uint64_t total_data_clusters, max_clusters;
 
 	/*
 	 * Further down the test the dev size will be larger than the g_dev_buffer size,
@@ -3244,12 +3219,12 @@ bs_grow_live_no_space(void)
 	 * Blobstore in this test has only space for single md_page for used_clusters,
 	 * which fits 1 bit per cluster minus the md header.
 	 *
-	 * Device size is set to one cluster beyond max_growable_size.
-	 * The grow operation must fail with -ENOSPC, since the used_cluster_mask
-	 * cannot track any additional clusters beyond the limit.
+	 * Dev size is increased to exceed the reserved space for the used_cluster_mask
+	 * in the metadata, expecting ENOSPC and no change in blobstore.
 	 */
-	beyond_max_growable_size = spdk_bs_get_max_growable_size(bs) + spdk_bs_get_cluster_size(bs);
-	dev->blockcnt = beyond_max_growable_size / dev->blocklen;
+	max_clusters = (spdk_bs_get_page_size(bs) - sizeof(struct spdk_bs_md_mask)) * 8;
+	max_clusters += 1;
+	dev->blockcnt = (max_clusters * spdk_bs_get_cluster_size(bs)) / dev->blocklen;
 	spdk_bs_grow_live(bs, bs_op_complete, NULL);
 	poll_threads();
 	CU_ASSERT(g_bserrno == -ENOSPC);
@@ -3376,6 +3351,7 @@ bs_unload(void)
 {
 	struct spdk_blob_store *bs = g_bs;
 	struct spdk_blob *blob;
+	struct spdk_power_failure_thresholds thresholds = {};
 
 	/* Create a blob and open it. */
 	blob = ut_blob_create_and_open(bs, NULL);
@@ -3392,6 +3368,15 @@ bs_unload(void)
 	spdk_blob_close(blob, blob_op_complete, NULL);
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
+
+	/* Try to unload blobstore, should fail due to I/O error */
+	thresholds.general_threshold = 2;
+	dev_set_power_failure_thresholds(thresholds);
+	g_bserrno = -1;
+	spdk_bs_unload(bs, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -EIO);
+	dev_reset_power_failure_event();
 
 	/* Try to unload blobstore, should fail with spdk_zmalloc returning NULL */
 	g_bserrno = -1;
@@ -3400,69 +3385,6 @@ bs_unload(void)
 	poll_threads();
 	CU_ASSERT(g_bserrno == -ENOMEM);
 	MOCK_CLEAR(spdk_zmalloc);
-}
-
-/*
- * Create a blobstore and then unload it.
- */
-static void
-bs_unload_hotremove(void)
-{
-	struct spdk_blob_store *bs;
-	struct spdk_bs_opts opts;
-	struct spdk_bs_dev *dev;
-	struct spdk_blob *blob;
-	struct spdk_power_failure_thresholds thresholds = {};
-
-	dev = init_dev();
-	spdk_bs_opts_init(&opts, sizeof(opts));
-	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "TESTTYPE");
-
-	/* Initialize a new blob store */
-	spdk_bs_init(dev, &opts, bs_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
-	bs = g_bs;
-
-	/* Create a blob and open it. */
-	blob = ut_blob_create_and_open(bs, NULL);
-
-	/* Simulate hotremoval of the underlying device */
-	thresholds.general_threshold = 1;
-	dev_set_power_failure_thresholds(thresholds);
-
-	/* Try to unload blobstore, should fail with open blob */
-	g_bserrno = -1;
-	spdk_bs_unload(bs, bs_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == -EBUSY);
-	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
-
-	/* Resize the blob to mark it as dirty */
-	g_bserrno = -1;
-	spdk_blob_resize(blob, 10, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-
-	/* Close the blob, then successfully unload blobstore */
-	g_bserrno = -1;
-	spdk_blob_close(blob, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == -EIO);
-
-	/* Unload blobstore while I/O to underlying device will fail */
-	g_bserrno = -1;
-	spdk_bs_unload(bs, bs_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == -EIO);
-
-	/*
-	 * Blobstore was unloaded when the device was not present,
-	 * clear the g_bs pointer as it is no longer valid.
-	 */
-	dev_reset_power_failure_event();
-	g_bs = NULL;
 }
 
 /*
@@ -5274,236 +5196,6 @@ blob_thin_prov_rw_iov(void)
 	poll_threads();
 
 	ut_blob_close_and_delete(bs, blob);
-}
-
-static void
-blob_thin_prov_unmap_update_extpage_ordered(void)
-{
-	struct spdk_blob_store *bs = g_bs;
-	struct spdk_blob *blob;
-	struct spdk_blob_opts opts;
-	struct spdk_io_channel *channel;
-	struct spdk_bs_channel *bs_channel;
-	uint64_t io_units_per_cluster, free_clusters;
-	uint8_t payload[10 * BLOCKLEN];
-	struct spdk_blob_free_cluster_ctx *ctx_bak[2], *ctx[2], *tmp;
-	uint32_t tailq_len;
-
-	free_clusters = spdk_bs_free_cluster_count(bs);
-	io_units_per_cluster = bs->io_units_per_cluster;
-
-	/* Set blob as thin provisioned */
-	ut_spdk_blob_opts_init(&opts);
-	opts.thin_provision = true;
-	opts.num_clusters = 4;
-	blob = ut_blob_create_and_open(bs, &opts);
-
-	/* Alloc io_ch */
-	set_thread(1);
-	channel = spdk_bs_alloc_io_channel(bs);
-	CU_ASSERT(channel != NULL);
-	bs_channel = spdk_io_channel_get_ctx(channel);
-
-	/* Write to the blob to alloc 2 clusters */
-	spdk_blob_io_write(blob, channel, payload, 0, 1, blob_op_complete, NULL);
-	spdk_blob_io_write(blob, channel, payload, io_units_per_cluster, 1, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bs_io_unit_is_allocated(blob, 0));
-	CU_ASSERT(bs_io_unit_is_allocated(blob, io_units_per_cluster));
-	CU_ASSERT(free_clusters - 2 == spdk_bs_free_cluster_count(bs));
-
-	/* Unmap cluster by two reqs, the extpage updating should be executed by order */
-	CU_ASSERT(TAILQ_EMPTY(&bs_channel->pending_free_cluster));
-	spdk_blob_io_unmap(blob, channel, 0, io_units_per_cluster, blob_op_complete, NULL);
-	spdk_blob_io_unmap(blob, channel, io_units_per_cluster, io_units_per_cluster, blob_op_complete,
-			   NULL);
-	poll_thread(1);
-
-	tailq_len = 0;
-	TAILQ_FOREACH(tmp, &bs_channel->pending_free_cluster, link) {
-		ctx_bak[tailq_len++] = tmp;
-	}
-	CU_ASSERT(tailq_len == 2);
-
-	/* mdthread execute extpage updating for req0 */
-	poll_thread(0);
-	/* req0 callback execute on thread1, the queue len should be 1 */
-	poll_thread(1);
-	tailq_len = 0;
-	TAILQ_FOREACH(tmp, &bs_channel->pending_free_cluster, link) {
-		ctx[tailq_len++] = tmp;
-	}
-	CU_ASSERT(tailq_len == 1);
-	CU_ASSERT(ctx[0] == ctx_bak[1]);
-	CU_ASSERT(free_clusters - 1 == spdk_bs_free_cluster_count(bs));
-
-	/* execute extpage updating for req1 and execute callback */
-	poll_thread(0);
-	poll_thread(1);
-	tailq_len = 0;
-	TAILQ_FOREACH(tmp, &bs_channel->pending_free_cluster, link) {
-		ctx[tailq_len++] = tmp;
-	}
-	CU_ASSERT(tailq_len == 0);
-	CU_ASSERT(free_clusters == spdk_bs_free_cluster_count(bs));
-
-	spdk_bs_free_io_channel(channel);
-	set_thread(0);
-	ut_blob_close_and_delete(bs, blob);
-}
-
-static void
-blob_thin_prov_update_extpage_ordered(void)
-{
-	struct spdk_blob_store *bs = g_bs;
-	struct spdk_blob *blob;
-	struct spdk_blob_opts opts;
-	struct spdk_io_channel *channel0, *channel1;
-	uint64_t io_units_per_cluster, free_clusters;
-	uint8_t payload[10 * 4096];
-	uint32_t tailq_len;
-	struct spdk_blob_cluster_op_ctx *cluster_op_ctx;
-
-	free_clusters = spdk_bs_free_cluster_count(bs);
-	io_units_per_cluster = bs->io_units_per_cluster;
-
-	/* Set blob as thin provisioned */
-	ut_spdk_blob_opts_init(&opts);
-	opts.thin_provision = true;
-	opts.num_clusters = 4;
-	blob = ut_blob_create_and_open(bs, &opts);
-
-	/* 1. unmap and write on iochannel1 */
-	/* Alloc io_ch */
-	channel0 = spdk_bs_alloc_io_channel(bs);
-	set_thread(1);
-	channel1 = spdk_bs_alloc_io_channel(bs);
-	CU_ASSERT(channel0 && channel1 && channel0 != channel1);
-
-	/* submit write to cluster_0 to alloc extpage */
-	spdk_blob_io_write(blob, channel1, payload, 0, 1, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bs_io_unit_is_allocated(blob, 0));
-	CU_ASSERT(free_clusters - 1 == spdk_bs_free_cluster_count(bs));
-
-	/* submit write cluster_1 and unmap cluster_0 */
-	g_bserrno_io0 = -1;
-	g_bserrno_io1 = -1;
-	spdk_blob_io_write(blob, channel1, payload, io_units_per_cluster, 1, blob_op_complete_io0, NULL);
-	spdk_blob_io_unmap(blob, channel1, 0, io_units_per_cluster, blob_op_complete_io1, NULL);
-
-	if (blob->use_extent_table) {
-		/* poll bdevio thread and mdthread twice */
-		CU_ASSERT(TAILQ_EMPTY(&blob->cluster_op_queue));
-		poll_thread(1);
-		poll_thread_times(0, 2);
-
-		tailq_len = 0;
-		TAILQ_FOREACH(cluster_op_ctx, &blob->cluster_op_queue, link) {
-			tailq_len++;
-		}
-		CU_ASSERT(tailq_len == 2);
-
-		/* poll until write io complete */
-		while (g_bserrno_io0 == -1) {
-			poll_thread_times(0, 1);
-			poll_thread_times(1, 1);
-		}
-
-		tailq_len = 0;
-		TAILQ_FOREACH(cluster_op_ctx, &blob->cluster_op_queue, link) {
-			tailq_len++;
-		}
-		CU_ASSERT(tailq_len == 1);
-
-		poll_threads();
-		CU_ASSERT(TAILQ_EMPTY(&blob->cluster_op_queue));
-		CU_ASSERT(free_clusters - 1 == spdk_bs_free_cluster_count(bs));
-	}
-
-	spdk_blob_io_unmap(blob, channel1, 0, 2 * io_units_per_cluster, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(free_clusters == spdk_bs_free_cluster_count(bs));
-
-	spdk_bs_free_io_channel(channel1);
-	set_thread(0);
-	spdk_bs_free_io_channel(channel0);
-	ut_blob_close_and_delete(bs, blob);
-	poll_threads();
-}
-
-static void
-blob_thin_prov_alloc_extpage_concurrently(void)
-{
-	struct spdk_blob_store *bs = g_bs;
-	struct spdk_blob *blob;
-	struct spdk_blob_opts opts;
-	struct spdk_io_channel *channel0, *channel1;
-	uint64_t io_units_per_cluster, free_clusters;
-	uint32_t free_md_pages;
-	uint8_t payload[10 * 4096];
-
-	free_clusters = spdk_bs_free_cluster_count(bs);
-	free_md_pages = spdk_bit_array_count_clear(bs->used_md_pages);
-	io_units_per_cluster = bs->io_units_per_cluster;
-
-	/* Set blob as thin provisioned */
-	ut_spdk_blob_opts_init(&opts);
-	opts.thin_provision = true;
-	opts.num_clusters = 4;
-
-	blob = ut_blob_create_and_open(bs, &opts);
-	CU_ASSERT(free_md_pages - 1 == spdk_bit_array_count_clear(bs->used_md_pages));
-
-	/* alloc 2 io_ch */
-	set_thread(0);
-	channel0 = spdk_bs_alloc_io_channel(bs);
-	CU_ASSERT(channel0 != NULL);
-
-	set_thread(1);
-	channel1 = spdk_bs_alloc_io_channel(bs);
-	CU_ASSERT(channel1 != NULL);
-
-	CU_ASSERT(channel0 != channel1);
-
-	/* Write to the blob from thread 0 and 1 */
-	CU_ASSERT(!bs_io_unit_is_allocated(blob, 0));
-	set_thread(0);
-	spdk_blob_io_write(blob, channel0, payload, 0, 1, blob_op_complete, NULL);
-
-	CU_ASSERT(!bs_io_unit_is_allocated(blob, io_units_per_cluster));
-	set_thread(1);
-	spdk_blob_io_write(blob, channel1, payload, io_units_per_cluster, 1, blob_op_complete, NULL);
-
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bs_io_unit_is_allocated(blob, 0));
-	CU_ASSERT(bs_io_unit_is_allocated(blob, io_units_per_cluster));
-
-	CU_ASSERT(free_clusters - 2 == spdk_bs_free_cluster_count(bs));
-	if (blob->use_extent_table) {
-		/* blob use 1 mdpage, cluster mapping use 1 mdpage */
-		CU_ASSERT(free_md_pages - 2 == spdk_bit_array_count_clear(bs->used_md_pages));
-	}
-
-	set_thread(0);
-	spdk_blob_io_unmap(blob, channel0, 0, 2 * io_units_per_cluster, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(free_clusters == spdk_bs_free_cluster_count(bs));
-
-	ut_blob_close_and_delete(bs, blob);
-	poll_threads();
-	CU_ASSERT(free_md_pages == spdk_bit_array_count_clear(bs->used_md_pages));
-
-	set_thread(0);
-	spdk_bs_free_io_channel(channel0);
-	set_thread(1);
-	spdk_bs_free_io_channel(channel1);
-	poll_threads();
-
-	set_thread(0);
 }
 
 struct iter_ctx {
@@ -10596,7 +10288,6 @@ main(int argc, char **argv)
 		CU_ADD_TEST(suite, bs_load_after_failed_grow);
 		CU_ADD_TEST(suite, bs_load_error);
 		CU_ADD_TEST(suite_bs, bs_unload);
-		CU_ADD_TEST(suite, bs_unload_hotremove);
 		CU_ADD_TEST(suite, bs_cluster_sz);
 		CU_ADD_TEST(suite_bs, bs_usable_clusters);
 		CU_ADD_TEST(suite, bs_resize_md);
@@ -10621,9 +10312,6 @@ main(int argc, char **argv)
 		CU_ADD_TEST(suite, blob_thin_prov_unmap_cluster);
 		CU_ADD_TEST(suite_bs, blob_thin_prov_rle);
 		CU_ADD_TEST(suite_bs, blob_thin_prov_rw_iov);
-		CU_ADD_TEST(suite_bs, blob_thin_prov_update_extpage_ordered);
-		CU_ADD_TEST(suite_bs, blob_thin_prov_alloc_extpage_concurrently);
-		CU_ADD_TEST(suite_bs, blob_thin_prov_unmap_update_extpage_ordered);
 		CU_ADD_TEST(suite, bs_load_iter_test);
 		CU_ADD_TEST(suite_bs, blob_snapshot_rw);
 		CU_ADD_TEST(suite_bs, blob_snapshot_rw_iov);

@@ -131,8 +131,8 @@ class heap_element:
 
 
 class heap:
-    def __init__(self, heap_id, size, num_allocations):
-        self.id = heap_id
+    def __init__(self, id, size, num_allocations):
+        self.id = id
         self.size = size
         self.num_allocations = num_allocations
         self.free_elements = []
@@ -244,31 +244,31 @@ def B_to_MiB(raw_value):
 
 
 def parse_zone(line):
-    _, info = line.split(':', 1)
-    name, length, addr, _ = info.split(',', 3)
+    zone, info = line.split(':', 1)
+    name, length, addr, trash = info.split(',', 3)
 
-    _, name = name.split(':', 1)
+    trash, name = name.split(':', 1)
     name = name.replace("<", "")
     name = name.replace(">", "")
-    _, length = length.split(':', 1)
-    _, addr = addr.split(':', 1)
+    trash, length = length.split(':', 1)
+    trash, addr = addr.split(':', 1)
 
     return memzone(name, int(length, 0), int(addr, 0))
 
 
 def parse_segment(line):
-    _, addr, _, length, _ = line.split(':')
-    addr, _ = addr.strip().split(' ')
-    length, _ = length.strip().split(' ')
+    trash, addr, iova, length, pagesz = line.split(':')
+    addr, trash = addr.strip().split(' ')
+    length, trash = length.strip().split(' ')
 
     return segment(int(length, 0), int(addr, 0))
 
 
 def parse_mempool_name(line):
-    name, _ = line.split('@')
+    name, addr = line.split('@')
     name = name.replace("<", "")
     name = name.replace(">", "")
-    _, _, name = name.partition(' ')
+    trash, sep, name = name.partition(' ')
 
     return name
 
@@ -338,16 +338,16 @@ def parse_mem_stats(stat_path):
                     try:
                         field, value = line.strip().split('=')
                         mempool_info[field] = value
-                    except Exception:
+                    except Exception as e:
                         pass
                 line = stats.readline()
 
             if state == parse_state.PARSE_HEAPS:
-                _, heap_id = line.strip().split(':')
+                trash, heap_id = line.strip().split(':')
                 line = stats.readline()
-                _, heap_size = line.split(':')
+                trash, heap_size = line.split(':')
                 line = stats.readline()
-                _, num_allocations = line.split(':')
+                trash, num_allocations = line.split(':')
                 if int(heap_size, 0) == 0:
                     pass
                 else:
@@ -362,9 +362,9 @@ def parse_mem_stats(stat_path):
                     state = parse_state.PARSE_HEAPS
                     continue
                 elif line.find("Malloc element at") == 0:
-                    _, address, status = line.rsplit(maxsplit=2)
+                    trash, address, status = line.rsplit(maxsplit=2)
                     line = stats.readline()
-                    _, length, _ = line.split(maxsplit=2)
+                    trash, length, trash = line.split(maxsplit=2)
                     line = stats.readline()
                     if "FREE" in status:
                         element = heap_element(int(length, 0), heap_elem_status.FREE, int(address, 0))

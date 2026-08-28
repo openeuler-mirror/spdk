@@ -2,10 +2,11 @@
 #  Copyright (C) 2018 Intel Corporation.
 #  All rights reserved.
 
-import json
-import logging
 import os
 import re
+import json
+import logging
+from subprocess import check_output
 from collections import OrderedDict
 from json.decoder import JSONDecodeError
 

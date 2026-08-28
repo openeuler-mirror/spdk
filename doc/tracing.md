@@ -31,28 +31,23 @@ build/bin/nvmf_tgt -e nvmf_rdma
 
 ### Enabling Individual Tracepoints
 
-Individual tracepoints can be enabled by name within a group. Use `:` to separate
-the group name from the tracepoint names, and `+` to combine multiple tracepoints:
+To enable individual tracepoints inside a group:
 
 ~~~bash
-build/bin/nvmf_tgt -e nvmf_tcp:TCP_REQ_EXECUTED
-build/bin/nvmf_tgt -e nvmf_tcp:TCP_REQ_EXECUTED+TCP_REQ_NEW
+build/bin/nvmf_tgt -e nvmf_rdma:B
 ~~~
 
-Tracepoint names are case-insensitive. The available tracepoint names for each group
-can be queried at runtime using the `trace_get_tpoint_group_mask` RPC (see below).
+where `:` is a separator and `B` is the tracepoint mask. This will enable only the first, second and fourth (binary: 1011) tracepoint inside `NVMe-oF RDMA` group.
 
 ### Combining Tracepoint Masks
 
-It is also possible to combine enabling whole groups of tpoints and individual ones,
-using commas to separate groups:
+It is also possible to combine enabling whole groups of tpoints and individual ones:
 
 ~~~bash
-build/bin/nvmf_tgt -e nvmf_tcp:TCP_REQ_EXECUTED,thread
+build/bin/nvmf_tgt -e nvmf_rdma:2,thread
 ~~~
 
-This enables the `TCP_REQ_EXECUTED` tracepoint from the `nvmf_tcp` group and all
-tracepoints defined by the `thread` group.
+This will enable the second tracepoint inside `NVMe-oF RDMA` group (0x10) and all of the tracepoints defined by the `thread` group (0x400).
 
 ### Tracepoint Group Names
 
@@ -188,33 +183,6 @@ To analyze the tracepoints output file from spdk_trace_record, simply run spdk_t
 ~~~bash
 build/bin/spdk_trace -f /tmp/spdk_nvmf_record.trace
 ~~~
-
-## Clearing Trace History {#clear_trace_history}
-
-The `trace_clear` RPC marks a point in time after which trace entries are considered valid.
-All entries recorded before the clear call are hidden from subsequent reads by external
-trace tools such as `spdk_trace`. Tracing itself is not disabled -- new entries continue
-to be recorded.
-
-~~~bash
-scripts/rpc.py trace_clear
-~~~
-
-This is useful when you want to isolate trace data for a specific test or workload
-without restarting the application.
-
-## Querying Tracepoint Status {#query_tpoint_status}
-
-The `trace_get_tpoint_group_mask` RPC returns the current tracepoint enablement state.
-In addition to the group-level mask, it includes per-tracepoint detail for each group:
-the tracepoint name, its ID within the group, and whether it is currently enabled.
-
-~~~bash
-scripts/rpc.py trace_get_tpoint_group_mask
-~~~
-
-This can be used to discover available tracepoint names for use with the `-e` option's
-name-based syntax.
 
 ## Adding New Tracepoints {#add_tracepoints}
 

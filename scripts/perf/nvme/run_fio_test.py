@@ -9,13 +9,20 @@
 # Prework: Change any fio configurations in the template fio config file fio_test.conf
 # Output: A csv file <hostname>_<num ssds>_perf_output.csv
 
-import itertools
-import json
-import os
 import subprocess
+from subprocess import check_call, call, check_output, Popen, PIPE
+import random
+import os
 import sys
+import re
+import signal
+import getopt
+from datetime import datetime
+from itertools import *
+import csv
+import itertools
 from shutil import copyfile
-from subprocess import check_output
+import json
 
 # Populate test parameters into these lists to run different workloads
 # The configuration below runs QD 1 & 128. To add QD 32 set q_depth=['1', '32', '128']
@@ -44,7 +51,7 @@ def run_fio(io_size_bytes, qd, rw_mix, cpu_mask, run_num, workload, run_time_sec
     command = "BLK_SIZE=" + str(io_size_bytes) + " RW=" + str(workload) + " MIX=" + str(rw_mix) \
         + " IODEPTH=" + str(qd) + " RUNTIME=" + str(run_time_sec) + " IOENGINE=" + path_to_ioengine \
         + " fio " + str(path_to_fio_conf) + " -output=" + string + " -output-format=json"
-    subprocess.check_output(command, shell=True)
+    output = subprocess.check_output(command, shell=True)
 
     print("Finished Test: IO Size={} QD={} Mix={} CPU Mask={}".format(io_size_bytes, qd, rw_mix, cpu_mask))
     return
@@ -64,6 +71,8 @@ def parse_results(io_size_bytes, qd, rw_mix, cpu_mask, run_num, workload, run_ti
     string = "s_" + str(io_size_bytes) + "_q_" + str(qd) + "_m_" + str(rw_mix) + "_c_" + str(cpu_mask) + "_run_" + str(run_num)
     with open(string) as json_file:
         data = json.load(json_file)
+        job_name = data['jobs'][job_pos]['jobname']
+        # print "FIO job name: ", job_name
         if 'lat_ns' in data['jobs'][job_pos]['read']:
             lat = 'lat_ns'
             lat_units = 'ns'
@@ -102,7 +111,7 @@ def parse_results(io_size_bytes, qd, rw_mix, cpu_mask, run_num, workload, run_ti
         with open(result_file_name, "a") as result_file:
             result_file.write(results + "\n")
         results_array = []
-    return results_array
+    return
 
 
 def get_nvme_devices_count():
@@ -123,7 +132,7 @@ def add_filename_to_conf(conf_file_name, bdf):
 
 
 if len(sys.argv) != 4:
-    print(f"usage: {sys.argv[0]} path_to_fio_conf path_to_ioengine num_ssds")
+    print("usage: " % sys.argv[0] % " path_to_fio_conf path_to_ioengine num_ssds")
     sys.exit()
 
 num_ssds = int(sys.argv[3])

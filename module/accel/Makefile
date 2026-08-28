@@ -7,12 +7,11 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y = error ioat ae4dma
+DIRS-y = error ioat
 DIRS-$(CONFIG_DPDK_COMPRESSDEV) += dpdk_compressdev
 DIRS-$(CONFIG_IDXD) += dsa
 DIRS-$(CONFIG_IDXD) += iaa
 DIRS-$(CONFIG_CRYPTO) += dpdk_cryptodev
-DIRS-$(CONFIG_CUDA) += cuda
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 DIRS-y += mlx5
 endif

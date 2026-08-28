@@ -74,18 +74,6 @@ spdk_bdev_is_md_interleaved(const struct spdk_bdev *bdev)
 	return spdk_u32_is_pow2(bdev->blocklen) == false;
 }
 
-bool
-spdk_bdev_is_md_separate(const struct spdk_bdev *bdev)
-{
-	return (bdev->md_len != 0) && !spdk_bdev_is_md_interleaved(bdev);
-}
-
-uint32_t
-spdk_bdev_get_md_size(const struct spdk_bdev *bdev)
-{
-	return bdev->md_len;
-}
-
 uint32_t
 spdk_bdev_get_data_block_size(const struct spdk_bdev *bdev)
 {
@@ -139,25 +127,18 @@ spdk_bdev_read(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 }
 
 int
-spdk_bdev_write_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
-			       void *buf, void *md, uint64_t offset_blocks, uint64_t num_blocks,
-			       spdk_bdev_io_completion_cb cb, void *cb_arg)
+spdk_bdev_write(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+		void *buf, uint64_t offset, uint64_t nbytes,
+		spdk_bdev_io_completion_cb cb, void *cb_arg)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 	struct raid_bdev_superblock *sb = buf;
 	struct spdk_bdev_io *bdev_io;
 	void *dest = g_buf;
 	uint32_t data_block_size = spdk_bdev_get_data_block_size(bdev);
-	uint64_t nbytes = num_blocks * bdev->blocklen;
-
-	if (spdk_bdev_is_md_separate(bdev)) {
-		CU_ASSERT(md != NULL);
-	} else {
-		CU_ASSERT(md == NULL);
-	}
 
 	g_write_counter++;
-	CU_ASSERT(offset_blocks == 0);
+	CU_ASSERT(offset == 0);
 	CU_ASSERT(nbytes == spdk_divide_round_up(sb->length, data_block_size) * bdev->blocklen);
 
 	while (nbytes > 0) {
@@ -213,7 +194,7 @@ write_sb_cb(int status, struct raid_bdev *raid_bdev, void *ctx)
 static void
 test_raid_bdev_write_superblock(void)
 {
-	struct raid_base_bdev_info base_info[3] = {};
+	struct raid_base_bdev_info base_info[3] = {{0}};
 	struct raid_bdev raid_bdev = {
 		.num_base_bdevs = SPDK_COUNTOF(base_info),
 		.base_bdev_info = base_info,
@@ -251,8 +232,6 @@ test_raid_bdev_write_superblock(void)
 		spdk_dma_free(raid_bdev.sb_io_buf);
 	}
 	raid_bdev.sb_io_buf = NULL;
-	spdk_dma_free(raid_bdev.sb_io_md_buf);
-	raid_bdev.sb_io_md_buf = NULL;
 
 	status = INT_MAX;
 	g_write_counter = 0;

@@ -12,25 +12,27 @@
 
 #include "nbd_internal.h"
 #include "spdk/log.h"
-#include "spdk_internal/rpc_autogen.h"
 
-struct rpc_nbd_start_disk_ext {
-	struct rpc_nbd_start_disk_ctx req;
+struct rpc_nbd_start_disk {
+	char *bdev_name;
+	char *nbd_device;
 	/* Used to search one available nbd device */
 	int nbd_idx;
 	bool nbd_idx_specified;
+	struct spdk_jsonrpc_request *request;
 };
 
 static void
-free_rpc_nbd_start_disk_ext(struct rpc_nbd_start_disk_ext *ereq)
+free_rpc_nbd_start_disk(struct rpc_nbd_start_disk *req)
 {
-	free_rpc_nbd_start_disk(&ereq->req);
-	free(ereq);
+	free(req->bdev_name);
+	free(req->nbd_device);
+	free(req);
 }
 
 static const struct spdk_json_object_decoder rpc_nbd_start_disk_decoders[] = {
-	{"bdev_name", offsetof(struct rpc_nbd_start_disk_ctx, bdev_name), spdk_json_decode_string},
-	{"nbd_device", offsetof(struct rpc_nbd_start_disk_ctx, nbd_device), spdk_json_decode_string, true},
+	{"bdev_name", offsetof(struct rpc_nbd_start_disk, bdev_name), spdk_json_decode_string},
+	{"nbd_device", offsetof(struct rpc_nbd_start_disk, nbd_device), spdk_json_decode_string, true},
 };
 
 /* Return 0 to indicate the nbd_device might be available,
@@ -108,18 +110,18 @@ find_available_nbd_disk(int nbd_idx, int *next_nbd_idx)
 static void
 rpc_start_nbd_done(void *cb_arg, struct spdk_nbd_disk *nbd, int rc)
 {
-	struct rpc_nbd_start_disk_ext *ereq = cb_arg;
-	struct rpc_nbd_start_disk_ctx *req = &ereq->req;
+	struct rpc_nbd_start_disk *req = cb_arg;
 	struct spdk_jsonrpc_request *request = req->request;
 	struct spdk_json_write_ctx *w;
 
 	/* Check whether it's automatic nbd-device assignment */
-	if (rc == -EBUSY && ereq->nbd_idx_specified == false) {
+	if (rc == -EBUSY && req->nbd_idx_specified == false) {
 		free(req->nbd_device);
 
-		req->nbd_device = find_available_nbd_disk(ereq->nbd_idx, &ereq->nbd_idx);
+		req->nbd_device = find_available_nbd_disk(req->nbd_idx, &req->nbd_idx);
 		if (req->nbd_device != NULL) {
-			spdk_nbd_start(req->bdev_name, req->nbd_device, rpc_start_nbd_done, ereq);
+			spdk_nbd_start(req->bdev_name, req->nbd_device,
+				       rpc_start_nbd_done, req);
 			return;
 		}
 
@@ -128,7 +130,7 @@ rpc_start_nbd_done(void *cb_arg, struct spdk_nbd_disk *nbd, int rc)
 
 	if (rc) {
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
-		free_rpc_nbd_start_disk_ext(ereq);
+		free_rpc_nbd_start_disk(req);
 		return;
 	}
 
@@ -136,24 +138,22 @@ rpc_start_nbd_done(void *cb_arg, struct spdk_nbd_disk *nbd, int rc)
 	spdk_json_write_string(w, spdk_nbd_get_path(nbd));
 	spdk_jsonrpc_end_result(request, w);
 
-	free_rpc_nbd_start_disk_ext(ereq);
+	free_rpc_nbd_start_disk(req);
 }
 
 static void
 rpc_nbd_start_disk(struct spdk_jsonrpc_request *request,
 		   const struct spdk_json_val *params)
 {
-	struct rpc_nbd_start_disk_ext *ereq;
-	struct rpc_nbd_start_disk_ctx *req;
+	struct rpc_nbd_start_disk *req;
 	int rc;
 
-	ereq = calloc(1, sizeof(*ereq));
-	if (ereq == NULL) {
+	req = calloc(1, sizeof(*req));
+	if (req == NULL) {
 		SPDK_ERRLOG("could not allocate nbd_start_disk request.\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, "Out of memory");
 		return;
 	}
-	req = &ereq->req;
 
 	if (spdk_json_decode_object(params, rpc_nbd_start_disk_decoders,
 				    SPDK_COUNTOF(rpc_nbd_start_disk_decoders),
@@ -169,7 +169,7 @@ rpc_nbd_start_disk(struct spdk_jsonrpc_request *request,
 	}
 
 	if (req->nbd_device != NULL) {
-		ereq->nbd_idx_specified = true;
+		req->nbd_idx_specified = true;
 		rc = check_available_nbd_disk(req->nbd_device);
 		if (rc == -EBUSY) {
 			SPDK_DEBUGLOG(nbd, "NBD device %s is in use.\n", req->nbd_device);
@@ -184,8 +184,8 @@ rpc_nbd_start_disk(struct spdk_jsonrpc_request *request,
 			goto invalid;
 		}
 	} else {
-		ereq->nbd_idx = 0;
-		req->nbd_device = find_available_nbd_disk(ereq->nbd_idx, &ereq->nbd_idx);
+		req->nbd_idx = 0;
+		req->nbd_device = find_available_nbd_disk(req->nbd_idx, &req->nbd_idx);
 		if (req->nbd_device == NULL) {
 			SPDK_INFOLOG(nbd, "There is no available nbd device.\n");
 			spdk_jsonrpc_send_error_response(request, -ENODEV,
@@ -196,18 +196,28 @@ rpc_nbd_start_disk(struct spdk_jsonrpc_request *request,
 
 	req->request = request;
 	spdk_nbd_start(req->bdev_name, req->nbd_device,
-		       rpc_start_nbd_done, ereq);
+		       rpc_start_nbd_done, req);
 
 	return;
 
 invalid:
-	free_rpc_nbd_start_disk_ext(ereq);
+	free_rpc_nbd_start_disk(req);
 }
 
 SPDK_RPC_REGISTER("nbd_start_disk", rpc_nbd_start_disk, SPDK_RPC_RUNTIME)
 
+struct rpc_nbd_stop_disk {
+	char *nbd_device;
+};
+
+static void
+free_rpc_nbd_stop_disk(struct rpc_nbd_stop_disk *req)
+{
+	free(req->nbd_device);
+}
+
 static const struct spdk_json_object_decoder rpc_nbd_stop_disk_decoders[] = {
-	{"nbd_device", offsetof(struct rpc_nbd_stop_disk_ctx, nbd_device), spdk_json_decode_string},
+	{"nbd_device", offsetof(struct rpc_nbd_stop_disk, nbd_device), spdk_json_decode_string},
 };
 
 struct nbd_disconnect_arg {
@@ -234,7 +244,7 @@ static void
 rpc_nbd_stop_disk(struct spdk_jsonrpc_request *request,
 		  const struct spdk_json_val *params)
 {
-	struct rpc_nbd_stop_disk_ctx req = {};
+	struct rpc_nbd_stop_disk req = {};
 	struct spdk_nbd_disk *nbd;
 	pthread_t tid;
 	struct nbd_disconnect_arg *thd_arg = NULL;
@@ -312,15 +322,25 @@ rpc_dump_nbd_info(struct spdk_json_write_ctx *w,
 	spdk_json_write_object_end(w);
 }
 
+struct rpc_nbd_get_disks {
+	char *nbd_device;
+};
+
+static void
+free_rpc_nbd_get_disks(struct rpc_nbd_get_disks *r)
+{
+	free(r->nbd_device);
+}
+
 static const struct spdk_json_object_decoder rpc_nbd_get_disks_decoders[] = {
-	{"nbd_device", offsetof(struct rpc_nbd_get_disks_ctx, nbd_device), spdk_json_decode_string, true},
+	{"nbd_device", offsetof(struct rpc_nbd_get_disks, nbd_device), spdk_json_decode_string, true},
 };
 
 static void
 rpc_nbd_get_disks(struct spdk_jsonrpc_request *request,
 		  const struct spdk_json_val *params)
 {
-	struct rpc_nbd_get_disks_ctx req = {};
+	struct rpc_nbd_get_disks req = {};
 	struct spdk_json_write_ctx *w;
 	struct spdk_nbd_disk *nbd = NULL;
 

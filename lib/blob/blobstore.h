@@ -148,8 +148,6 @@ struct spdk_blob {
 	TAILQ_HEAD(, spdk_blob_persist_ctx) pending_persists;
 	TAILQ_HEAD(, spdk_blob_persist_ctx) persists_to_complete;
 
-	TAILQ_HEAD(, spdk_blob_cluster_op_ctx) cluster_op_queue;
-
 	/* Number of data clusters retrieved from extent table,
 	 * that many have to be read from extent pages. */
 	uint64_t	remaining_clusters_in_et;
@@ -224,8 +222,6 @@ struct spdk_bs_channel {
 
 	/* This page is only used during release of an existing cluster. */
 	struct spdk_blob_md_page        *release_cluster_page;
-
-	TAILQ_HEAD(, spdk_blob_free_cluster_ctx) pending_free_cluster;
 
 	RB_HEAD(blob_esnap_channel_tree, blob_esnap_channel) esnap_channels;
 };

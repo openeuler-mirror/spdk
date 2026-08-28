@@ -9,12 +9,25 @@
 #include "spdk/util.h"
 #include "spdk/string.h"
 #include "spdk/log.h"
-#include "spdk_internal/rpc_autogen.h"
+
+/* Structure to hold the parameters for this RPC method. */
+struct rpc_bdev_passthru_create {
+	char *base_bdev_name;
+	char *name;
+};
+
+/* Free the allocated memory resource after the RPC handling. */
+static void
+free_rpc_bdev_passthru_create(struct rpc_bdev_passthru_create *r)
+{
+	free(r->base_bdev_name);
+	free(r->name);
+}
 
 /* Structure to decode the input parameters for this RPC method. */
 static const struct spdk_json_object_decoder rpc_bdev_passthru_create_decoders[] = {
-	{"base_bdev_name", offsetof(struct rpc_bdev_passthru_create_ctx, base_bdev_name), spdk_json_decode_string},
-	{"name", offsetof(struct rpc_bdev_passthru_create_ctx, name), spdk_json_decode_string},
+	{"base_bdev_name", offsetof(struct rpc_bdev_passthru_create, base_bdev_name), spdk_json_decode_string},
+	{"name", offsetof(struct rpc_bdev_passthru_create, name), spdk_json_decode_string},
 };
 
 /* Decode the parameters for this RPC method and properly construct the passthru
@@ -24,7 +37,7 @@ static void
 rpc_bdev_passthru_create(struct spdk_jsonrpc_request *request,
 			 const struct spdk_json_val *params)
 {
-	struct rpc_bdev_passthru_create_ctx req = {};
+	struct rpc_bdev_passthru_create req = {NULL};
 	struct spdk_json_write_ctx *w;
 	int rc;
 
@@ -52,8 +65,18 @@ cleanup:
 }
 SPDK_RPC_REGISTER("construct_ext_passthru_bdev", rpc_bdev_passthru_create, SPDK_RPC_RUNTIME)
 
+struct rpc_bdev_passthru_delete {
+	char *name;
+};
+
+static void
+free_rpc_bdev_passthru_delete(struct rpc_bdev_passthru_delete *req)
+{
+	free(req->name);
+}
+
 static const struct spdk_json_object_decoder rpc_bdev_passthru_delete_decoders[] = {
-	{"name", offsetof(struct rpc_bdev_passthru_delete_ctx, name), spdk_json_decode_string},
+	{"name", offsetof(struct rpc_bdev_passthru_delete, name), spdk_json_decode_string},
 };
 
 static void
@@ -73,7 +96,7 @@ static void
 rpc_bdev_passthru_delete(struct spdk_jsonrpc_request *request,
 			 const struct spdk_json_val *params)
 {
-	struct rpc_bdev_passthru_delete_ctx req = {};
+	struct rpc_bdev_passthru_delete req = {NULL};
 	struct spdk_bdev *bdev;
 
 	if (spdk_json_decode_object(params, rpc_bdev_passthru_delete_decoders,

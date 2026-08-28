@@ -21,6 +21,7 @@ static char *g_corpus_dir;
 static uint8_t *g_repro_data;
 static size_t g_repro_size;
 static pthread_t g_fuzz_td;
+static pthread_t g_reactor_td;
 static bool g_in_fuzzer;
 
 #define MAX_COMMANDS 5
@@ -823,10 +824,8 @@ exit_handler(void)
 {
 	if (g_in_fuzzer) {
 		spdk_app_stop(0);
+		pthread_join(g_reactor_td, NULL);
 	}
-	while (g_in_fuzzer) {
-		usleep(1);
-	};
 }
 
 static void *
@@ -887,6 +886,8 @@ static void
 begin_fuzz(void *ctx)
 {
 	int i;
+
+	g_reactor_td = pthread_self();
 
 	for (i = 0; i < MAX_COMMANDS; i++) {
 		g_cmds[i].buf = spdk_malloc(4096, 0, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
@@ -1021,6 +1022,5 @@ main(int argc, char **argv)
 	rc = spdk_app_start(&opts, begin_fuzz, NULL);
 
 	spdk_app_fini();
-	g_in_fuzzer = false;
 	return rc;
 }

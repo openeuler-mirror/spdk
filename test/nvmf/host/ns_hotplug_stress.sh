@@ -41,10 +41,8 @@ add_remove() {
 
 	for ((i = 0; i < ns_per_thread; i++)); do
 		current=$((nsid + i))
-		$tgt_rpc <<- EOF
-			nvmf_subsystem_add_ns -n $current $NVME_SUBNQN ${bdev_name}
-			nvmf_subsystem_remove_ns $NVME_SUBNQN $current
-		EOF
+		$tgt_rpc nvmf_subsystem_add_ns -n "$current" "$NVME_SUBNQN" "${bdev_name}"
+		$tgt_rpc nvmf_subsystem_remove_ns "$NVME_SUBNQN" "$current"
 
 		# Check if intiator is still alive, otherwise we'd wait until all threads finish
 		kill -s 0 "$spdk_app_pid"
@@ -60,55 +58,45 @@ add_remove() {
 
 add_remove_resize() {
 	local nsid=$1 thread=$2
-	local inc_nsid dec_nsid
+	local current
 	local max_namespaces=$ns_per_thread
 	local bdev_name="null${thread}"
+	local resize_bdev_size resize_nsid stable_bdev_size stable_nsid
 
-	local resize_bdev_size="$bdev_size"
-	local stable_bdev_size="$((bdev_size - thread))"
+	# Two bdevs will be added as NSID and NSID-1, forcing log page to contain
+	# entries with decreasing NSID.
+	$tgt_rpc bdev_null_create "${bdev_name}_inc" "$bdev_size" "$blk_size"
+	$tgt_rpc bdev_null_create "${bdev_name}_dec" "$bdev_size" "$blk_size"
 
-	# Split into two non-overlapping halves so that the "inc" and "dec"
-	# add/remove paths never reuse the same NSID. Each NSID is used
-	# exactly once -- no NSID that was removed is ever re-added. This
-	# avoids a race where the initiator is still processing the AER for
-	# a removed NSID when the target re-adds a namespace at that same
-	# NSID.
-	local inc_nsid_base=$nsid
-	local dec_nsid_base=$((nsid + 2 * max_namespaces - 1))
-	local resize_nsid="$((nsid + --max_namespaces))"
-	local stable_nsid="$((nsid + --max_namespaces))"
-
-	# Two bdevs will be added/removed with increasing and decreasing NSIDs
-	# respectively, forcing the log page to contain entries with diverging
-	# NSID ordering.
-	# A third bdev will be increased in size during the test, forcing AERs
+	# This bdev will be increased in size during the test, forcing AERs
 	# for namespace attribute changes other than add/remove.
-	# A fourth bdev will remain at fixed size, to verify that it persist
-	# throughout the test and no changes to its attributes were made. Size
-	# is unique among all threads.
-	$tgt_rpc <<- EOF
-		bdev_null_create ${bdev_name}_inc $bdev_size $blk_size
-		bdev_null_create ${bdev_name}_dec $bdev_size $blk_size
-		bdev_null_create ${bdev_name}_resize $resize_bdev_size $blk_size
-		nvmf_subsystem_add_ns -n $resize_nsid $NVME_SUBNQN ${bdev_name}_resize
-		bdev_null_create ${bdev_name}_stable $stable_bdev_size $blk_size
-		nvmf_subsystem_add_ns -n $stable_nsid $NVME_SUBNQN ${bdev_name}_stable
-	EOF
+	resize_bdev_size="$bdev_size"
+	$tgt_rpc bdev_null_create "${bdev_name}_resize" "$resize_bdev_size" "$blk_size"
+	resize_nsid="$((nsid + --max_namespaces))"
+	$tgt_rpc nvmf_subsystem_add_ns -n "$resize_nsid" "$NVME_SUBNQN" "${bdev_name}_resize"
 
-	for ((i = 0; i < max_namespaces; i++)); do
-		inc_nsid=$((inc_nsid_base + i))
-		dec_nsid=$((dec_nsid_base - i))
-		((++resize_bdev_size))
+	# This bdev will remain at fixed size, to verify that it persist throughout
+	# the test and no changes to its attributes were made. Size is unique
+	# among all threads.
+	stable_bdev_size="$((bdev_size - thread))"
+	$tgt_rpc bdev_null_create "${bdev_name}_stable" "$stable_bdev_size" "$blk_size"
+	stable_nsid="$((nsid + --max_namespaces))"
+	$tgt_rpc nvmf_subsystem_add_ns -n "$stable_nsid" "$NVME_SUBNQN" "${bdev_name}_stable"
 
-		$tgt_rpc <<- EOF
-			nvmf_subsystem_add_ns -n $inc_nsid $NVME_SUBNQN ${bdev_name}_inc
-			nvmf_subsystem_remove_ns $NVME_SUBNQN $inc_nsid
-			nvmf_subsystem_add_ns -n $dec_nsid $NVME_SUBNQN ${bdev_name}_dec
-			nvmf_subsystem_remove_ns $NVME_SUBNQN $dec_nsid
-			bdev_null_resize ${bdev_name}_resize $resize_bdev_size
-		EOF
+	# Start at 1 to accommodate the namespace with decremented NSID.
+	# Max namespaces is ns_per_thread decreased by namespaces created above.
+	for ((i = 1; i < max_namespaces; i++)); do
+		current=$((nsid + i))
+		$tgt_rpc nvmf_subsystem_add_ns -n "$current" "$NVME_SUBNQN" "${bdev_name}_inc"
+		$tgt_rpc nvmf_subsystem_remove_ns "$NVME_SUBNQN" "$current"
 
-		# Wait for updated size on the initiator
+		# Rather than just increasing NSID, interleave with lower NSID values.
+		current=$((nsid + i - 1))
+		$tgt_rpc nvmf_subsystem_add_ns -n "$current" "$NVME_SUBNQN" "${bdev_name}_dec"
+		$tgt_rpc nvmf_subsystem_remove_ns "$NVME_SUBNQN" "$current"
+
+		# Resize the bdev and wait for updated size on the initiator
+		$tgt_rpc bdev_null_resize "${bdev_name}_resize" "$((++resize_bdev_size))"
 		waitforcondition '[[ "$(get_bdev_size_s nvme0n${resize_nsid})" == "$resize_bdev_size" ]]'
 
 		# Check if namespace for stable bdev still has the same size
@@ -118,32 +106,13 @@ add_remove_resize() {
 		kill -s 0 "$spdk_app_pid"
 	done
 
-	$tgt_rpc <<- EOF
-		nvmf_subsystem_remove_ns $NVME_SUBNQN $stable_nsid
-		nvmf_subsystem_remove_ns $NVME_SUBNQN $resize_nsid
-		bdev_null_delete ${bdev_name}_inc
-		bdev_null_delete ${bdev_name}_dec
-		bdev_null_delete ${bdev_name}_resize
-		bdev_null_delete ${bdev_name}_stable
-	EOF
-}
+	$tgt_rpc nvmf_subsystem_remove_ns "$NVME_SUBNQN" "$stable_nsid"
+	$tgt_rpc nvmf_subsystem_remove_ns "$NVME_SUBNQN" "$resize_nsid"
 
-test_case() {
-	local fn=$1 stride_nsid=$2 admin_poll_period_us=$3
-	local start_nsid i pids=()
-
-	$rpc_py bdev_nvme_set_options --nvme-adminq-poll-period-us "$admin_poll_period_us"
-	attach_controller
-
-	for ((i = 0; i < nthreads; ++i)); do
-		# Every thread can use stride_nsid NSIDs starting at specific offset.
-		start_nsid="$((1 + (stride_nsid * i)))"
-		"$fn" "$start_nsid" "$i" &
-		pids+=($!)
-	done
-	wait "${pids[@]}"
-
-	$rpc_py bdev_nvme_detach_controller nvme0
+	$tgt_rpc bdev_null_delete "${bdev_name}_inc"
+	$tgt_rpc bdev_null_delete "${bdev_name}_dec"
+	$tgt_rpc bdev_null_delete "${bdev_name}_resize"
+	$tgt_rpc bdev_null_delete "${bdev_name}_stable"
 }
 
 nvmftestinit
@@ -157,27 +126,55 @@ for ((i = 0; i < io_paths_nr; i++)); do
 	$tgt_rpc nvmf_subsystem_add_listener "$NVME_SUBNQN" -t "$TEST_TRANSPORT" -a "$NVMF_FIRST_TARGET_IP" -s "$((NVMF_PORT + i))"
 done
 
-run_app_bg "${SPDK_APP[@]}" -m 0x2
+"${SPDK_APP[@]}" -m 0x2 "${NO_HUGE[@]}" &
 spdk_app_pid=$!
 trap 'killprocess $spdk_app_pid; nvmftestfini; exit 1' SIGINT SIGTERM EXIT
 waitforlisten "$spdk_app_pid"
 
 # Run several subsystem_{add,remove}_ns RPCs in parallel to ensure they'll get queued
-nthreads=6
-ns_per_thread=15
+nthreads=8 pids=()
+ns_per_thread=20
 bdev_size=100
 blk_size=4096
 
-# Test case 1 - add/remove ns with the default admin queue poll period.
-run_test "nvmf_ns_hotplug_stress_tc1" test_case add_remove "$ns_per_thread" 10000
+# Test case 1 - add/remove ns with delay for processing admin queue
 
-# Test case 2 - add/remove ns with delay so AERs pile up on the initiator side.
-run_test "nvmf_ns_hotplug_stress_tc2" test_case add_remove "$ns_per_thread" 1000000
+# Instead of default 10ms, use 1 second timeout
+$rpc_py bdev_nvme_set_options --nvme-adminq-poll-period-us 1000000
+attach_controller
 
-# Test case 3 - add/remove/resize ns.
-# Each thread needs 2 * ns_per_thread NSIDs: the lower half drives the increasing-NSID
-# add/remove path (and the resize, stable namespaces), the upper half drives the "dec" path.
-run_test "nvmf_ns_hotplug_stress_tc3" test_case add_remove_resize "$((2 * ns_per_thread))" 10000
+for ((i = 0; i < nthreads; ++i)); do
+	# Every thread can use ns_per_thread NSIDs starting at specific offset.
+	start_nsid="$((1 + (ns_per_thread * i)))"
+	add_remove "$start_nsid" "$i" &
+	pids+=($!)
+done
+wait "${pids[@]}"
+
+# Reattach controller with restored admin queue poll period to 10ms
+$rpc_py bdev_nvme_detach_controller nvme0
+$rpc_py bdev_nvme_set_options --nvme-adminq-poll-period-us 10000
+attach_controller
+
+# Test case 2 - add/remove ns constantly
+
+for ((i = 0; i < nthreads; ++i)); do
+	# Every thread can use ns_per_thread NSIDs starting at specific offset.
+	start_nsid="$((1 + (ns_per_thread * i)))"
+	add_remove "$start_nsid" "$i" &
+	pids+=($!)
+done
+wait "${pids[@]}"
+
+# Test 3 - add/remove/resize ns
+
+for ((i = 0; i < nthreads; ++i)); do
+	# Every thread can use ns_per_thread NSIDs starting at specific offset.
+	start_nsid="$((1 + (ns_per_thread * i)))"
+	add_remove_resize "$start_nsid" "$i" &
+	pids+=($!)
+done
+wait "${pids[@]}"
 
 waitforlisten "$spdk_app_pid"
 killprocess "$spdk_app_pid"

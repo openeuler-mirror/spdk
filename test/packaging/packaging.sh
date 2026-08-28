@@ -9,4 +9,3 @@ rootdir=$(readlink -f "$testdir/../../")
 source "$rootdir/test/common/autotest_common.sh"
 
 run_test "rpm_packaging" "$testdir/rpm/rpm.sh"
-run_test "python_packaging" "$testdir/python/python.sh"

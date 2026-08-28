@@ -156,11 +156,11 @@ dummy_cb_fn(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 static void
 test_nvme_qpair_process_completions(void)
 {
-	struct spdk_nvme_qpair		admin_qp = {};
-	struct spdk_nvme_qpair		qpair = {};
-	struct spdk_nvme_ctrlr		ctrlr = {};
-	struct nvme_request		dummy_1 = {};
-	struct nvme_request		dummy_2 = {};
+	struct spdk_nvme_qpair		admin_qp = {0};
+	struct spdk_nvme_qpair		qpair = {0};
+	struct spdk_nvme_ctrlr		ctrlr = {{0}};
+	struct nvme_request		dummy_1 = {{0}};
+	struct nvme_request		dummy_2 = {{0}};
 	int				rc;
 
 	dummy_1.cb_fn = dummy_cb_fn;
@@ -399,27 +399,27 @@ test_get_status_string(void)
 
 	status.sct = SPDK_NVME_SCT_GENERIC;
 	status.sc = SPDK_NVME_SC_SUCCESS;
-	status_string = spdk_nvme_cpl_get_status_string_ext(&status, 0);
+	status_string = spdk_nvme_cpl_get_status_string(&status);
 	CU_ASSERT(strcmp(status_string, "SUCCESS") == 0);
 
 	status.sct = SPDK_NVME_SCT_COMMAND_SPECIFIC;
 	status.sc = SPDK_NVME_SC_COMPLETION_QUEUE_INVALID;
-	status_string = spdk_nvme_cpl_get_status_string_ext(&status, 0);
+	status_string = spdk_nvme_cpl_get_status_string(&status);
 	CU_ASSERT(strcmp(status_string, "INVALID COMPLETION QUEUE") == 0);
 
 	status.sct = SPDK_NVME_SCT_MEDIA_ERROR;
 	status.sc = SPDK_NVME_SC_UNRECOVERED_READ_ERROR;
-	status_string = spdk_nvme_cpl_get_status_string_ext(&status, 0);
+	status_string = spdk_nvme_cpl_get_status_string(&status);
 	CU_ASSERT(strcmp(status_string, "UNRECOVERED READ ERROR") == 0);
 
 	status.sct = SPDK_NVME_SCT_VENDOR_SPECIFIC;
 	status.sc = 0;
-	status_string = spdk_nvme_cpl_get_status_string_ext(&status, 0);
+	status_string = spdk_nvme_cpl_get_status_string(&status);
 	CU_ASSERT(strcmp(status_string, "VENDOR SPECIFIC") == 0);
 
 	status.sct = 0x4;
 	status.sc = 0;
-	status_string = spdk_nvme_cpl_get_status_string_ext(&status, 0);
+	status_string = spdk_nvme_cpl_get_status_string(&status);
 	CU_ASSERT(strcmp(status_string, "RESERVED") == 0);
 }
 #endif
@@ -448,13 +448,11 @@ test_nvme_qpair_add_cmd_error_injection(void)
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(!TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == true);
 
 	/* Remove cmd error injection */
 	spdk_nvme_qpair_remove_cmd_error_injection(&ctrlr, NULL, SPDK_NVME_OPC_GET_FEATURES);
 
 	CU_ASSERT(TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == false);
 
 	/* IO error injection at completion path */
 	rc = spdk_nvme_qpair_add_cmd_error_injection(&ctrlr, &qpair,
@@ -463,7 +461,6 @@ test_nvme_qpair_add_cmd_error_injection(void)
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(!TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == true);
 
 	/* Provide the same opc, and check whether allocate a new entry */
 	rc = spdk_nvme_qpair_add_cmd_error_injection(&ctrlr, &qpair,
@@ -473,13 +470,11 @@ test_nvme_qpair_add_cmd_error_injection(void)
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(!TAILQ_EMPTY(&qpair.err_cmd_head));
 	CU_ASSERT(TAILQ_NEXT(TAILQ_FIRST(&qpair.err_cmd_head), link) == NULL);
-	CU_ASSERT(qpair.err_cmd_enabled == true);
 
 	/* Remove cmd error injection */
 	spdk_nvme_qpair_remove_cmd_error_injection(&ctrlr, &qpair, SPDK_NVME_OPC_READ);
 
 	CU_ASSERT(TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == false);
 
 	rc = spdk_nvme_qpair_add_cmd_error_injection(&ctrlr, &qpair,
 			SPDK_NVME_OPC_COMPARE, true, 0, 5,
@@ -487,13 +482,11 @@ test_nvme_qpair_add_cmd_error_injection(void)
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(!TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == true);
 
 	/* Remove cmd error injection */
 	spdk_nvme_qpair_remove_cmd_error_injection(&ctrlr, &qpair, SPDK_NVME_OPC_COMPARE);
 
 	CU_ASSERT(TAILQ_EMPTY(&qpair.err_cmd_head));
-	CU_ASSERT(qpair.err_cmd_enabled == false);
 
 	pthread_mutex_destroy(&ctrlr.ctrlr_lock);
 	cleanup_submit_request_test(&qpair);

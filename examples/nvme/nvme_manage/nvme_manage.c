@@ -173,9 +173,9 @@ display_namespace(struct spdk_nvme_ns *ns)
 	       (long long)nsdata->nuse,
 	       (long long)nsdata->nuse / 1024 / 1024);
 	printf("Format Progress Indicator:   %s\n",
-	       nsdata->fpi.fpis ? "Supported" : "Not Supported");
-	if (nsdata->fpi.fpis && nsdata->fpi.rfnvm) {
-		printf("Formatted Percentage:	%d%%\n", 100 - nsdata->fpi.rfnvm);
+	       nsdata->fpi.fpi_supported ? "Supported" : "Not Supported");
+	if (nsdata->fpi.fpi_supported && nsdata->fpi.percentage_remaining) {
+		printf("Formatted Percentage:	%d%%\n", 100 - nsdata->fpi.percentage_remaining);
 	}
 	printf("Number of LBA Formats:       %d\n", nsdata->nlbaf + 1);
 	printf("Current LBA Format:          LBA Format #%02d\n",
@@ -192,7 +192,7 @@ display_namespace(struct spdk_nvme_ns *ns)
 		       nsdata->dps.pit, nsdata->dps.md_start ? "Head" : "Tail");
 	}
 	printf("Multipath IO and Sharing:    %s\n",
-	       nsdata->nmic.shrns ? "Supported" : "Not Supported");
+	       nsdata->nmic.can_share ? "Supported" : "Not Supported");
 	printf("\n");
 }
 
@@ -229,9 +229,9 @@ display_controller(struct dev *dev, int model)
 	printf("Admin Command Set Attributes\n");
 	printf("============================\n");
 	printf("Namespace Manage And Attach:		%s\n",
-	       cdata->oacs.nms ? "Supported" : "Not Supported");
+	       cdata->oacs.ns_manage ? "Supported" : "Not Supported");
 	printf("Namespace Format:			%s\n",
-	       cdata->oacs.fnvms ? "Supported" : "Not Supported");
+	       cdata->oacs.format ? "Supported" : "Not Supported");
 	printf("\n");
 	printf("NVM Command Set Attributes\n");
 	printf("============================\n");
@@ -470,7 +470,7 @@ ns_manage_add(struct dev *device, uint64_t ns_size, uint64_t ns_capacity, int ns
 		ndata->dps.pit = ns_dps_type;
 		ndata->dps.md_start = ns_dps_location;
 	}
-	ndata->nmic.shrns = ns_nmic;
+	ndata->nmic.can_share = ns_nmic;
 	nsid = spdk_nvme_ctrlr_create_ns(device->ctrlr, ndata);
 	if (nsid == 0) {
 		fprintf(stdout, "ns manage: Failed\n");
@@ -524,7 +524,7 @@ attach_and_detach_ns(int attachment_op)
 		return;
 	}
 
-	if (!ctrlr->cdata->oacs.nms) {
+	if (!ctrlr->cdata->oacs.ns_manage) {
 		printf("Controller does not support ns management\n");
 		return;
 	}
@@ -555,7 +555,7 @@ add_ns(void)
 		return;
 	}
 
-	if (!ctrlr->cdata->oacs.nms) {
+	if (!ctrlr->cdata->oacs.ns_manage) {
 		printf("Controller does not support ns management\n");
 		return;
 	}
@@ -624,7 +624,7 @@ delete_ns(void)
 		return;
 	}
 
-	if (!ctrlr->cdata->oacs.nms) {
+	if (!ctrlr->cdata->oacs.ns_manage) {
 		printf("Controller does not support ns management\n");
 		return;
 	}
@@ -662,7 +662,7 @@ format_nvm(void)
 
 	cdata = ctrlr->cdata;
 
-	if (!cdata->oacs.fnvms) {
+	if (!cdata->oacs.format) {
 		printf("Controller does not support Format NVM command\n");
 		return;
 	}
@@ -788,7 +788,7 @@ update_firmware_image(void)
 
 	cdata = ctrlr->cdata;
 
-	if (!cdata->oacs.fwds) {
+	if (!cdata->oacs.firmware) {
 		printf("Controller does not support firmware download and commit command\n");
 		return;
 	}

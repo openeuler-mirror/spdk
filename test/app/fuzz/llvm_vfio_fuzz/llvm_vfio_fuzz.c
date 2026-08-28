@@ -39,7 +39,7 @@ static char					*g_corpus_dir;
 static uint8_t					*g_repro_data;
 static size_t					g_repro_size;
 static pthread_t				g_fuzz_td;
-static bool					g_in_fuzzer;
+static pthread_t				g_reactor_td;
 static struct fuzz_type				*g_fuzzer;
 
 enum IO_POLLER_STATE {
@@ -270,9 +270,7 @@ exit_handler(void)
 		spdk_app_stop(0);
 	}
 
-	while (g_in_fuzzer) {
-		usleep(1);
-	};
+	pthread_join(g_reactor_td, NULL);
 }
 
 static void *
@@ -302,7 +300,6 @@ start_fuzzer(void *ctx)
 	argv[argc - 2] = time_str;
 	argv[argc - 1] = g_corpus_dir;
 
-	g_in_fuzzer = true;
 	atexit(exit_handler);
 
 	free(g_artifact_prefix);
@@ -318,7 +315,6 @@ start_fuzzer(void *ctx)
 		 * anywhere by LLVM.
 		 */
 	}
-	g_in_fuzzer = false;
 
 	return NULL;
 }
@@ -330,9 +326,9 @@ read_complete(void *arg, const struct spdk_nvme_cpl *completion)
 	struct io_thread *io = (struct io_thread *)arg;
 
 	if (spdk_nvme_cpl_is_error(completion)) {
-		spdk_nvme_qpair_print_completion_ext(io->io_qpair, completion, SPDK_NVME_OPC_READ);
+		spdk_nvme_qpair_print_completion(io->io_qpair, (struct spdk_nvme_cpl *)completion);
 		fprintf(stderr, "I/O read error status: %s\n",
-			spdk_nvme_cpl_get_status_string_ext(&completion->status, SPDK_NVME_OPC_READ));
+			spdk_nvme_cpl_get_status_string(&completion->status));
 		io->state = IO_POLLER_STATE_TERMINATE_WAIT;
 		pthread_kill(g_fuzz_td, SIGSEGV);
 		return;
@@ -359,9 +355,10 @@ write_complete(void *arg, const struct spdk_nvme_cpl *completion)
 	struct io_thread *io = (struct io_thread *)arg;
 
 	if (spdk_nvme_cpl_is_error(completion)) {
-		spdk_nvme_qpair_print_completion_ext(io->io_qpair, completion, SPDK_NVME_OPC_WRITE);
+		spdk_nvme_qpair_print_completion(io->io_qpair,
+						 (struct spdk_nvme_cpl *)completion);
 		fprintf(stderr, "I/O write error status: %s\n",
-			spdk_nvme_cpl_get_status_string_ext(&completion->status, SPDK_NVME_OPC_WRITE));
+			spdk_nvme_cpl_get_status_string(&completion->status));
 		io->state = IO_POLLER_STATE_TERMINATE_WAIT;
 		pthread_kill(g_fuzz_td, SIGSEGV);
 		return;
@@ -541,6 +538,8 @@ begin_fuzz(void *ctx)
 {
 	int rc = 0;
 
+	g_reactor_td = pthread_self();
+
 	rc = pthread_create(&g_fuzz_td, NULL, start_fuzzer, NULL);
 	if (rc != 0) {
 		spdk_app_stop(-1);
@@ -692,6 +691,5 @@ main(int argc, char **argv)
 	rc = spdk_app_start(&opts, begin_fuzz, NULL);
 
 	spdk_app_fini();
-	g_in_fuzzer = false;
 	return rc;
 }

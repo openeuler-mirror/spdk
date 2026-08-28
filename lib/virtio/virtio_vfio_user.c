@@ -226,6 +226,7 @@ virtio_vfio_user_setup_queue(struct virtio_dev *vdev, struct virtqueue *vq)
 	uint32_t addr_lo, addr_hi;
 	uint16_t notify_off, queue_enable;
 	void *queue_mem;
+	uint64_t queue_mem_phys_addr;
 	int rc;
 
 	queue_mem = spdk_zmalloc(vq->vq_ring_size, VIRTIO_PCI_VRING_ALIGN, NULL,
@@ -234,8 +235,13 @@ virtio_vfio_user_setup_queue(struct virtio_dev *vdev, struct virtqueue *vq)
 		return -ENOMEM;
 	}
 
-	/* vfio-user address translation uses `IOVA=VA` mode */
-	vq->vq_ring_mem = (uint64_t)(uintptr_t)queue_mem;
+	queue_mem_phys_addr = spdk_vtophys(queue_mem, NULL);
+	if (queue_mem_phys_addr == SPDK_VTOPHYS_ERROR) {
+		spdk_free(queue_mem);
+		return -EFAULT;
+	}
+
+	vq->vq_ring_mem = queue_mem_phys_addr;
 	vq->vq_ring_virt_mem = queue_mem;
 
 	desc_addr = vq->vq_ring_mem;
