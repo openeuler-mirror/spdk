@@ -1,0 +1,7 @@
+packages+=(
+	rdma-core
+	clang-tools
+	targetcli-fb
+	open-isns-utils
+	btrfs-progs
+)
