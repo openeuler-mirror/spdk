@@ -9,8 +9,7 @@
 #include "spdk/env.h"
 #include "spdk/log.h"
 
-#include "spdk/init.h"
-#include "spdk_internal/rpc_autogen.h"
+#include "spdk_internal/init.h"
 
 #include "subsystem.h"
 
@@ -53,9 +52,12 @@ rpc_framework_get_subsystems(struct spdk_jsonrpc_request *request,
 
 SPDK_RPC_REGISTER("framework_get_subsystems", rpc_framework_get_subsystems, SPDK_RPC_RUNTIME)
 
-static const struct spdk_json_object_decoder rpc_framework_get_config_decoders[] = {
+struct rpc_framework_get_config_ctx {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_framework_get_config_ctx[] = {
 	{"name", offsetof(struct rpc_framework_get_config_ctx, name), spdk_json_decode_string},
-	{"with_batches", offsetof(struct rpc_framework_get_config_ctx, with_batches), spdk_json_decode_bool, true},
 };
 
 static void
@@ -66,8 +68,8 @@ rpc_framework_get_config(struct spdk_jsonrpc_request *request,
 	struct spdk_json_write_ctx *w;
 	struct spdk_subsystem *subsystem;
 
-	if (spdk_json_decode_object(params, rpc_framework_get_config_decoders,
-				    SPDK_COUNTOF(rpc_framework_get_config_decoders), &req)) {
+	if (spdk_json_decode_object(params, rpc_framework_get_config_ctx,
+				    SPDK_COUNTOF(rpc_framework_get_config_ctx), &req)) {
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid arguments");
 		return;
 	}
@@ -76,14 +78,13 @@ rpc_framework_get_config(struct spdk_jsonrpc_request *request,
 	if (!subsystem) {
 		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 						     "Subsystem '%s' not found", req.name);
-		free_rpc_framework_get_config(&req);
+		free(req.name);
 		return;
 	}
 
-	free_rpc_framework_get_config(&req);
+	free(req.name);
 
 	w = spdk_jsonrpc_begin_result(request);
-	spdk_json_write_add_flags(w, req.with_batches ? 0 : SPDK_JSON_WRITE_FLAG_FLATTEN_BATCHES);
 	subsystem_config_json(w, subsystem);
 	spdk_jsonrpc_end_result(request, w);
 }
@@ -104,7 +105,6 @@ dump_pci_device(void *ctx, struct spdk_pci_device *dev)
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "address", bdf);
 	spdk_json_write_named_string(w, "type", spdk_pci_device_get_type(dev));
-	spdk_json_write_named_int32(w, "numa_id", spdk_pci_device_get_numa_id(dev));
 
 	spdk_json_write_name(w, "config_space");
 	rc = spdk_pci_device_cfg_read(dev, config, 256, 0);

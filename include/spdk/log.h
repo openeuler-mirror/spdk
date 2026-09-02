@@ -20,9 +20,6 @@
 extern "C" {
 #endif
 
-#define SPDK_LOG_DEPRECATION_EVERY_24H	86400
-#define SPDK_LOG_DEPRECATION_ALWAYS	0
-
 /**
  * for passing user-provided log call
  *
@@ -360,7 +357,7 @@ int spdk_log_deprecation_register(const char *tag, const char *description,
 				  struct spdk_deprecation **reg);
 
 #define SPDK_LOG_DEPRECATION_REGISTER(tag, desc, release, rate) \
-	struct spdk_deprecation *_deprecated_##tag; \
+	static struct spdk_deprecation *_deprecated_##tag; \
 	static void __attribute__((constructor)) _spdk_deprecation_register_##tag(void) \
 	{ \
 		int rc; \

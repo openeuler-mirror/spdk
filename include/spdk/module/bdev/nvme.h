@@ -16,27 +16,19 @@
 extern "C" {
 #endif
 
-struct spdk_bdev_nvme_ctrlr;
-
 typedef void (*spdk_bdev_nvme_create_cb)(void *ctx, size_t bdev_count, int rc);
 typedef void (*spdk_bdev_nvme_set_multipath_policy_cb)(void *cb_arg, int rc);
 typedef void (*spdk_bdev_nvme_delete_cb)(void *ctx, int rc);
 
 enum spdk_bdev_nvme_multipath_policy {
-	SPDK_BDEV_NVME_MULTIPATH_POLICY_ACTIVE_PASSIVE,
-	SPDK_BDEV_NVME_MULTIPATH_POLICY_ACTIVE_ACTIVE,
+	BDEV_NVME_MP_POLICY_ACTIVE_PASSIVE,
+	BDEV_NVME_MP_POLICY_ACTIVE_ACTIVE,
 };
 
 enum spdk_bdev_nvme_multipath_selector {
-	SPDK_BDEV_NVME_MULTIPATH_SELECTOR_ROUND_ROBIN = 1,
-	SPDK_BDEV_NVME_MULTIPATH_SELECTOR_QUEUE_DEPTH,
+	BDEV_NVME_MP_SELECTOR_ROUND_ROBIN = 1,
+	BDEV_NVME_MP_SELECTOR_QUEUE_DEPTH,
 };
-
-/** \deprecated Use SPDK_BDEV_NVME_MULTIPATH_POLICY_* and SPDK_BDEV_NVME_MULTIPATH_SELECTOR_* instead. */
-#define BDEV_NVME_MP_POLICY_ACTIVE_PASSIVE	SPDK_BDEV_NVME_MULTIPATH_POLICY_ACTIVE_PASSIVE
-#define BDEV_NVME_MP_POLICY_ACTIVE_ACTIVE	SPDK_BDEV_NVME_MULTIPATH_POLICY_ACTIVE_ACTIVE
-#define BDEV_NVME_MP_SELECTOR_ROUND_ROBIN	SPDK_BDEV_NVME_MULTIPATH_SELECTOR_ROUND_ROBIN
-#define BDEV_NVME_MP_SELECTOR_QUEUE_DEPTH	SPDK_BDEV_NVME_MULTIPATH_SELECTOR_QUEUE_DEPTH
 
 struct spdk_bdev_nvme_ctrlr_opts {
 	uint32_t prchk_flags;
@@ -56,11 +48,6 @@ struct spdk_bdev_nvme_ctrlr_opts {
 
 	/* Set to true if multipath enabled */
 	bool multipath;
-
-	uint8_t multipath_policy; /* \ref spdk_bdev_nvme_multipath_policy */
-	uint8_t multipath_selector; /* \ref spdk_bdev_nvme_multipath_selector */
-	/* Minimum I/O count before switching path (round_robin selector only). */
-	uint32_t multipath_min_io;
 };
 
 struct spdk_nvme_path_id;
@@ -122,11 +109,6 @@ struct spdk_bdev_nvme_opts {
 	uint8_t reserved121[3];
 	uint32_t tcp_connect_timeout_ms;
 	bool enable_flush;
-	uint8_t multipath_policy; /* \ref spdk_bdev_nvme_multipath_policy */
-	uint8_t multipath_selector; /* \ref spdk_bdev_nvme_multipath_selector */
-	uint8_t reserved131[1];
-	/* Minimum I/O count before switching path (round_robin selector only). */
-	uint32_t multipath_min_io;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 136, "Incorrect size");
 
@@ -179,10 +161,6 @@ int spdk_bdev_nvme_delete(const char *name, const struct spdk_nvme_path_id *path
 /**
  * Set multipath policy of the NVMe bdev.
  *
- * \deprecated Use spdk_bdev_nvme_create() with multipath options instead.
- *
- * Subsequent calls for the same bdev must wait until the current execution finishes.
- *
  * \param name NVMe bdev name.
  * \param policy Multipath policy (active-passive or active-active).
  * \param selector Multipath selector (round_robin, queue_depth).
@@ -218,89 +196,6 @@ void spdk_bdev_nvme_get_opts(struct spdk_bdev_nvme_opts *opts, size_t opts_size)
  * \return 0 on success, negative errno on failure.
  */
 int spdk_bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts);
-
-/**
- * Get the first bdev_nvme controller group.
- *
- * Must be called from the app thread.
- *
- * \warning The returned handle is valid only while the controller group exists.
- * Do not hold references across operations that may add or remove controller groups.
- *
- * \return Pointer to the first controller group, or NULL if none.
- */
-struct spdk_bdev_nvme_ctrlr *spdk_bdev_nvme_first_bdev_ctrlr(void);
-
-/**
- * Get the next bdev_nvme controller group.
- *
- * Must be called from the app thread.
- *
- * \warning The returned handle is valid only while the controller group exists.
- * Do not hold references across operations that may add or remove controller groups.
- *
- * \param prev Previous controller group returned by first or next.
- * \return Pointer to the next controller group, or NULL if no more.
- */
-struct spdk_bdev_nvme_ctrlr *spdk_bdev_nvme_next_bdev_ctrlr(struct spdk_bdev_nvme_ctrlr *prev);
-
-/**
- * Get the name of a bdev_nvme controller group.
- *
- * Must be called from the app thread.
- *
- * \warning The returned string is valid only while the controller group exists.
- *
- * \param nbdev_ctrlr Controller group handle.
- * \return Name string.
- */
-const char *spdk_bdev_nvme_ctrlr_get_name(struct spdk_bdev_nvme_ctrlr *nbdev_ctrlr);
-
-/**
- * Get the first NVMe controller within a bdev_nvme controller group.
- *
- * Must be called from the app thread.
- *
- * \warning The returned pointer is valid only while the controller is attached.
- * Do not hold references across operations that may disconnect controllers.
- *
- * \param nbdev_ctrlr Controller group handle.
- * \return Pointer to the first spdk_nvme_ctrlr, or NULL if none.
- */
-struct spdk_nvme_ctrlr *spdk_bdev_nvme_ctrlr_first_ctrlr(
-	struct spdk_bdev_nvme_ctrlr *nbdev_ctrlr);
-
-/**
- * Get the next NVMe controller within a bdev_nvme controller group.
- *
- * Must be called from the app thread.
- *
- * \warning The returned pointer is valid only while the controller is attached.
- * Do not hold references across operations that may disconnect controllers.
- *
- * \param nbdev_ctrlr Controller group handle.
- * \param prev Previous spdk_nvme_ctrlr returned by first_ctrlr or next_ctrlr.
- * \return Pointer to the next spdk_nvme_ctrlr, or NULL if no more.
- */
-struct spdk_nvme_ctrlr *spdk_bdev_nvme_ctrlr_next_ctrlr(
-	struct spdk_bdev_nvme_ctrlr *nbdev_ctrlr, struct spdk_nvme_ctrlr *prev);
-
-/**
- * Get the controller opts.
- *
- * Returns creation time controller configuration.
- *
- * Must be called from the app thread.
- *
- * \warning The returned pointer is valid only while the controller is attached.
- * Do not hold references across operations that may disconnect controllers.
- *
- * \param nbdev_ctrlr Controller group handle.
- * \param ctrlr Controller handle (optional); if not provided opts are retrived from the first.
- * \return Pointer to the options, or NULL if the controller group is invalid.
- */
-const struct spdk_bdev_nvme_ctrlr_opts *spdk_bdev_nvme_ctrlr_get_opts(
-	struct spdk_bdev_nvme_ctrlr *nbdev_ctrlr, struct spdk_nvme_ctrlr *ctrlr);
 
 #ifdef __cplusplus
 }

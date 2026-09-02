@@ -6,21 +6,19 @@
 #  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
+import logging
 import argparse
 import importlib
-import json
-import logging
 import os
-import shlex
 import sys
-import types
+import shlex
+import json
 
 sys.path.insert(0, os.path.dirname(__file__) + '/../python')
 
-from spdk import cli
-from spdk.rpc.client import JSONRPCClient, JSONRPCDryRunClient, JSONRPCException, JSONRPCGoClient
-from spdk.rpc.cmd_parser import print_null
-from spdk.rpc.helpers import check_called_name, hint_rpc_name
+import spdk.cli as cli  # noqa
+from spdk.rpc.client import print_dict, print_json, print_array, JSONRPCClient, JSONRPCGoClient, JSONRPCException  # noqa
+from spdk.rpc.helpers import deprecated_aliases  # noqa
 
 
 def create_parser():
@@ -53,15 +51,42 @@ def create_parser():
                                 pipes and can be used as a faster way to send RPC commands. If enabled, rpc.py \
                                 must be executed without any other parameters.")
     parser.set_defaults(is_server=False)
-    parser.add_argument('-b', '--batch-mode', action=argparse.BooleanOptionalAction,
-                        help="If batch mode enabled, read multiple RPC commands from stdin and send them as a single \
-                                JSON-RPC batch request.")
     parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
     subparsers = parser.add_subparsers(help='RPC methods', dest='called_rpc_name', metavar='')
-    for _, obj in vars(cli).items():
-        if isinstance(obj, types.ModuleType) and obj.__name__.startswith("spdk.cli."):
-            obj.add_parser(subparsers)
+    cli.accel.add_parser(subparsers)
+    cli.app.add_parser(subparsers)
+    cli.bdev.add_parser(subparsers)
+    cli.fsdev.add_parser(subparsers)
+    cli.iscsi.add_parser(subparsers)
+    cli.keyring.add_parser(subparsers)
+    cli.log.add_parser(subparsers)
+    cli.lvol.add_parser(subparsers)
+    cli.nbd.add_parser(subparsers)
+    cli.ublk.add_parser(subparsers)
+    cli.notify.add_parser(subparsers)
+    cli.nvmf.add_parser(subparsers)
+    cli.trace.add_parser(subparsers)
+    cli.vhost.add_parser(subparsers)
+    cli.vmd.add_parser(subparsers)
+    cli.sock.add_parser(subparsers)
+    cli.vfio_user.add_parser(subparsers)
+    cli.iobuf.add_parser(subparsers)
+    cli.parser.add_parser(subparsers)
     return parser, subparsers
+
+
+def check_called_name(name):
+    if name in deprecated_aliases:
+        print("{} is deprecated, use {} instead.".format(name, deprecated_aliases[name]), file=sys.stderr)
+
+
+class dry_run_client:
+    def call(self, method, params=None):
+        print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))
+
+
+def null_print(arg):
+    pass
 
 
 def call_rpc_func(args):
@@ -69,10 +94,7 @@ def call_rpc_func(args):
     check_called_name(args.called_rpc_name)
 
 
-def execute_script(parser, client, timeout, fd, batch=False):
-    if batch:
-        print("WARNING: Batch mode is experimental. Some RPCs may not work correctly in batch mode.",
-              file=sys.stderr)
+def execute_script(parser, client, timeout, fd):
     executed_rpc = ""
     for rpc_call in map(str.rstrip, fd):
         if not rpc_call.strip():
@@ -92,47 +114,6 @@ def execute_script(parser, client, timeout, fd, batch=False):
             print(executed_rpc.strip() + " <<<")
             print(ex.message)
             exit(1)
-
-    # In batch mode, send collected requests and receive results
-    if batch:
-        try:
-            if not client.send_batch():
-                return
-            response = client.recv()
-            results = JSONRPCClient.handle_batch_response(response)
-            for result in results:
-                if result is not None:
-                    print(json.dumps(result, indent=2))
-        except JSONRPCException as ex:
-            print("Exception:")
-            print(executed_rpc.strip())
-            print(ex.message)
-            exit(1)
-
-
-def run_server(parser, subparsers, plugins, use_go_client):
-    for line in sys.stdin:
-        cmd = shlex.split(line)
-        try:
-            load_plugin(cmd, subparsers, plugins)
-            tmp_args = parser.parse_args(cmd)
-        except SystemExit:
-            print("**STATUS=1", flush=True)
-            continue
-
-        try:
-            if use_go_client:
-                tmp_args.client = JSONRPCGoClient(tmp_args.server_addr,
-                                                    log_level=getattr(logging, tmp_args.verbose.upper()))
-            else:
-                tmp_args.client = JSONRPCClient(
-                    tmp_args.server_addr, tmp_args.port, tmp_args.timeout,
-                    log_level=getattr(logging, tmp_args.verbose.upper()), conn_retries=tmp_args.conn_retries)
-            call_rpc_func(tmp_args)
-            print("**STATUS=0", flush=True)
-        except JSONRPCException as ex:
-            print(ex.message)
-            print("**STATUS=1", flush=True)
 
 
 def load_plugin(args, subparsers, plugins):
@@ -159,6 +140,18 @@ def load_plugin(args, subparsers, plugins):
             print("Module %s not found" % rpc_module)
 
 
+def replace_arg_underscores(args):
+    # All option names are defined with dashes only - for example: --tgt-name
+    # But if user used underscores, convert them to dashes (--tgt_name => --tgt-name)
+    # SPDK was inconsistent previously and had some options with underscores, so
+    # doing this conversion ensures backward compatibility with older scripts.
+    for i in range(len(args)):
+        arg = args[i]
+        if arg.startswith('--') and "_" in arg:
+            opt, *vals = arg.split('=')
+            args[i] = '='.join([opt.replace('_', '-'), *vals])
+
+
 def main():
 
     parser, subparsers = create_parser()
@@ -166,7 +159,8 @@ def main():
     plugins = []
     load_plugin(None, subparsers, plugins)
 
-    parser = hint_rpc_name(parser)
+    replace_arg_underscores(sys.argv)
+
     args = parser.parse_args()
 
     try:
@@ -179,13 +173,36 @@ def main():
         parser.print_help()
         exit(1)
     if args.is_server:
-        run_server(parser, subparsers, plugins, use_go_client)
+        for input in sys.stdin:
+            cmd = shlex.split(input)
+            replace_arg_underscores(cmd)
+            try:
+                load_plugin(cmd, subparsers, plugins)
+                tmp_args = parser.parse_args(cmd)
+            except SystemExit as ex:
+                print("**STATUS=1", flush=True)
+                continue
+
+            try:
+                if use_go_client:
+                    tmp_args.client = JSONRPCGoClient(tmp_args.server_addr,
+                                                      log_level=getattr(logging, tmp_args.verbose.upper()))
+                else:
+                    tmp_args.client = JSONRPCClient(
+                        tmp_args.server_addr, tmp_args.port, tmp_args.timeout,
+                        log_level=getattr(logging, tmp_args.verbose.upper()), conn_retries=tmp_args.conn_retries)
+                call_rpc_func(tmp_args)
+                print("**STATUS=0", flush=True)
+            except JSONRPCException as ex:
+                print(ex.message)
+                print("**STATUS=1", flush=True)
         exit(0)
     elif args.dry_run:
-        args.client = JSONRPCDryRunClient(batch_mode=args.batch_mode)
-        for _, obj in vars(cli).items():
-            if isinstance(obj, types.ModuleType) and obj.__name__.startswith("spdk.cli."):
-                obj.print_dict = obj.print_json = obj.print_array = print_null
+        args.client = dry_run_client()
+        global print_dict, print_json, print_array
+        print_dict = null_print
+        print_json = null_print
+        print_array = null_print
     elif args.go_client or use_go_client:
         try:
             args.client = JSONRPCGoClient(args.server_addr,
@@ -197,8 +214,7 @@ def main():
         try:
             args.client = JSONRPCClient(args.server_addr, args.port, args.timeout,
                                         log_level=getattr(logging, args.verbose.upper()),
-                                        conn_retries=args.conn_retries,
-                                        batch_mode=args.batch_mode)
+                                        conn_retries=args.conn_retries)
         except JSONRPCException as ex:
             print(ex.message)
             exit(1)
@@ -210,7 +226,7 @@ def main():
             print(ex.message)
             exit(1)
     else:
-        execute_script(parser, args.client, args.timeout, sys.stdin, batch=args.batch_mode)
+        execute_script(parser, args.client, args.timeout, sys.stdin)
 
 
 if __name__ == "__main__":

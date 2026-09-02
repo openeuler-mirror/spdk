@@ -977,144 +977,6 @@ function raid_resize_superblock_test() {
 	return 0
 }
 
-function raid_nvmf_uaf_test() {
-	# Test for use-after-free crash in RAID1 bdev during NVMe-oF controller failures
-	# Reproduces issue: https://github.com/spdk/spdk/issues/3703
-	local num_base_bdevs=$1
-	local max_iterations=$2
-	# Test configuration - NQNs, ports, and naming prefixes
-	local nqn_base="nqn.2023-01.test"
-	local bdev_nqn_prefix="${nqn_base}:bdev_"
-	local raid_nqn="${nqn_base}:raid"
-	local bdev_name_prefix="bdev_"
-	local lvs_name_prefix="bdev_lvs_"
-	local lvol_name_prefix="bdev_lvol_"
-	local controller_prefix="nvme"
-	local disk_img_prefix="disk-img-"
-	local base_port=4450
-	local raid_port=4420
-	local raid_name="raid1_test"
-	local spdk_serial_base="SPDK00000000000001"
-	local spdk_raid_serial="SPDK00000000000002"
-	local tcp_addr="127.0.0.1"
-	local raid_uaf_tmp_dir="$tmp_dir/raid_uaf_test"
-
-	# Load NVMe module
-	modprobe nvme-tcp
-	for ((iteration = 1; iteration <= max_iterations; iteration++)); do
-		echo "starting iteration $iteration of $max_iterations"
-
-		# Start SPDK target with NVMe-oF support
-		$rootdir/build/bin/spdk_tgt &
-		local spdk_pid=$!
-		waitforlisten $spdk_pid
-
-		# Initialize NVMe-oF transport
-		mkdir -p "$raid_uaf_tmp_dir"
-		$rpc_py nvmf_create_transport -t TCP
-
-		# Create base bdevs and export them via NVMe-oF
-		for ((i = 0; i < num_base_bdevs; i++)); do
-			local bdev_name="${bdev_name_prefix}$i"
-			local lvs="${lvs_name_prefix}$i"
-			local lvol="${lvol_name_prefix}$i"
-			local nqn="${bdev_nqn_prefix}$i"
-			local port=$((base_port + i))
-			local controller="${controller_prefix}$i"
-			local disk_img="$raid_uaf_tmp_dir/${disk_img_prefix}$i"
-
-			# Create backing storage: AIO bdev -> LVOL store -> LVOL
-			rm -rf $disk_img
-			truncate -s 1024MB $disk_img
-			$rpc_py bdev_aio_create $disk_img $bdev_name 512 --fallocate
-			$rpc_py bdev_lvol_create_lvstore $bdev_name $lvs
-			$rpc_py bdev_lvol_create -l $lvs $lvol 1024 -t
-
-			# Export LVOL via NVMe-oF
-			$rpc_py nvmf_create_subsystem $nqn -s "${spdk_serial_base}$i" -a
-			$rpc_py nvmf_subsystem_add_ns -g "$(printf "1234567890abcdef%08x%08x" "$(date +%s)" $i)" $nqn $lvs/$lvol
-			$rpc_py nvmf_subsystem_add_listener $nqn -t TCP -a $tcp_addr -s $port
-
-			# Connect back to own NVMe-oF target to create local controller
-			$rpc_py bdev_nvme_attach_controller -b $controller -t tcp -a $tcp_addr -n $nqn -s $port -f ipv4 \
-				--ctrlr-loss-timeout-sec=2 --fast-io-fail-timeout-sec=2 --reconnect-delay-sec=1
-		done
-
-		# Build RAID1 array from attached NVMe controllers
-		local bdevs=""
-		for ((i = 0; i < num_base_bdevs; i++)); do
-			bdevs+="${controller_prefix}${i}n1 "
-		done
-		$rpc_py bdev_raid_create -n $raid_name -r raid1 -b "'$bdevs'"
-
-		# Export RAID1 bdev via NVMe-oF
-		$rpc_py nvmf_create_subsystem $raid_nqn -s $spdk_raid_serial -a
-		$rpc_py nvmf_subsystem_add_ns $raid_nqn $raid_name
-		$rpc_py nvmf_subsystem_add_listener $raid_nqn -t TCP -a $tcp_addr -s $raid_port
-
-		# Connect to RAID1 device from host side
-		sleep 0.1
-		local dev_before dev_after new_nvme_dev
-		dev_before=$(printf "%s\n" /dev/nvme*n*)
-		nvme connect -t tcp -n $raid_nqn -a $tcp_addr -s $raid_port --ctrl-loss-tmo=0
-		sleep 0.1
-		dev_after=$(printf "%s\n" /dev/nvme*n*)
-		new_nvme_dev=$(comm -13 <(echo "$dev_before") <(echo "$dev_after"))
-
-		# Mount filesystem and start I/O workload
-		local data_dir="$raid_uaf_tmp_dir/data"
-		mkdir -p $data_dir
-		mkfs -t xfs -f $new_nvme_dev > /dev/null 2>&1
-		mount -t xfs $new_nvme_dev $data_dir
-
-		fio --name=raid_uaf_test \
-			--directory=$data_dir \
-			--sync=1 \
-			--direct=1 \
-			--size=1G \
-			--rw=randwrite \
-			--bs=4k \
-			--ioengine=libaio \
-			--iodepth=32 \
-			--numjobs=10 \
-			--timeout=60000 \
-			--time_based=1 \
-			--group_reporting \
-			--output-format=terse \
-			&
-
-		local fio_pid=$!
-		# Wait for some time to let I/O go through base bdevs
-		sleep 4
-
-		# Trigger UAF race condition: force controller disconnects during active I/O
-		for ((i = 0; i < num_base_bdevs - 1; i++)); do
-			local nqn="${bdev_nqn_prefix}$i"
-			local port=$((base_port + i))
-			$rpc_py nvmf_subsystem_remove_listener $nqn -t tcp -a $tcp_addr -s $port 2> /dev/null || true
-			sleep 0.5
-		done
-
-		# Wait for UAF race condition: fast_io_fail_timeout_sec (2s) expires,
-		# causing base bdev removal while NVMe module attempts I/O abort on
-		# already-freed core channel pointers
-		sleep 6
-
-		killprocess $fio_pid 2> /dev/null || true
-		umount -fl $new_nvme_dev 2> /dev/null || true
-		nvme disconnect -n $raid_nqn 2> /dev/null || true
-		rm -rf $raid_uaf_tmp_dir
-		if ! kill -0 $spdk_pid 2> /dev/null; then
-			echo "spdk_tgt crashed during iteration $iteration"
-			return 1
-		else
-			killprocess $spdk_pid 2> /dev/null || true
-		fi
-	done
-
-	return 0
-}
-
 function raid_resize_data_offset_test() {
 
 	$rootdir/test/app/bdev_svc/bdev_svc -i 0 -L bdev_raid &
@@ -1147,61 +1009,12 @@ function raid_resize_data_offset_test() {
 	return 0
 }
 
-function raid_delete_clear_sb_test() {
-	local raid_level=$1
-	local num_base_bdevs=$2
-	local base_bdevs=($(for ((i = 1; i <= num_base_bdevs; i++)); do echo BaseBdev$i; done))
-	local raid_bdev_name="raid_bdev"
-	local strip_size
-	local create_arg
-
-	if [ $raid_level != "raid1" ]; then
-		strip_size=64
-		create_arg+=" -z $strip_size"
-	else
-		strip_size=0
-	fi
-
-	"$rootdir/test/app/bdev_svc/bdev_svc" -L bdev_raid &
-	raid_pid=$!
-	waitforlisten $raid_pid
-
-	# Create base bdevs
-	for bdev in "${base_bdevs[@]}"; do
-		$rpc_py bdev_malloc_create 32 $base_blocklen $base_malloc_params -b ${bdev}_malloc
-		$rpc_py bdev_passthru_create -b ${bdev}_malloc -p $bdev
-	done
-
-	# Create RAID bdev with superblock
-	$rpc_py bdev_raid_create $create_arg -r $raid_level -b "'${base_bdevs[*]}'" -n $raid_bdev_name -s
-	verify_raid_bdev_state $raid_bdev_name "online" $raid_level $strip_size $num_base_bdevs
-
-	# Delete RAID bdev with clear_sb=true (should clear superblock)
-	$rpc_py bdev_raid_delete $raid_bdev_name --clear-sb
-
-	# Recreate the base bdevs - raid bdev should NOT start from superblock
-	for bdev in "${base_bdevs[@]}"; do
-		$rpc_py bdev_passthru_delete $bdev
-		$rpc_py bdev_passthru_create -b ${bdev}_malloc -p $bdev
-	done
-	$rpc_py bdev_wait_for_examine
-	[ -z $($rpc_py bdev_raid_get_bdevs all | jq '.[]') ]
-
-	# Try to create the RAID with an invalid name
-	NOT $rpc_py bdev_raid_create $create_arg -r $raid_level -b "'${base_bdevs[*]}'" -n "${base_bdevs[0]}" -s
-	[ -z $($rpc_py bdev_raid_get_bdevs all | jq '.[]') ]
-
-	# Create RAID bdev again
-	$rpc_py bdev_raid_create $create_arg -r $raid_level -b "'${base_bdevs[*]}'" -n $raid_bdev_name -s
-	verify_raid_bdev_state $raid_bdev_name "online" $raid_level $strip_size $num_base_bdevs
-
-	killprocess $raid_pid
-}
-
 mkdir -p "$tmp_dir"
 trap 'cleanup; exit 1' EXIT
 
 base_blocklen=512
+
+run_test "raid_io_resource_dependence" raid_io_resource_dependence
 
 run_test "raid1_resize_data_offset_test" raid_resize_data_offset_test
 
@@ -1211,7 +1024,6 @@ run_test "raid1_resize_superblock_test" raid_resize_superblock_test 1
 if [ $(uname -s) = Linux ] && modprobe -n nbd; then
 	has_nbd=true
 	modprobe nbd
-	run_test "raid_io_resource_dependence" raid_io_resource_dependence
 	run_test "raid_unmap_function_test_raid0" raid_unmap_function_test raid0
 	run_test "raid_unmap_function_test_concat" raid_unmap_function_test concat
 	run_test "raid_unmap_function_test_raid1" raid_unmap_function_test raid1
@@ -1249,9 +1061,6 @@ for n in {3..4}; do
 	fi
 done
 
-run_test "raid1_delete_clear_sb_test" raid_delete_clear_sb_test raid1 2
-run_test "raid5f_delete_clear_sb_test" raid_delete_clear_sb_test raid5f 3
-
 base_blocklen=4096
 
 run_test "raid_state_function_test_sb_4k" raid_state_function_test raid1 2 true
@@ -1271,8 +1080,6 @@ base_malloc_params="-m 32 -i"
 run_test "raid_state_function_test_sb_md_interleaved" raid_state_function_test raid1 2 true
 run_test "raid_superblock_test_md_interleaved" raid_superblock_test raid1 2
 run_test "raid_rebuild_test_sb_md_interleaved" raid_rebuild_test raid1 2 true false false
-
-run_test "raid_nvmf_uaf_test" raid_nvmf_uaf_test 10 10
 
 trap - EXIT
 cleanup

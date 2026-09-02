@@ -27,14 +27,10 @@ DEPDIRS-accel := iobuf
 DEPDIRS-bdev := accel vmd sock iobuf keyring
 DEPDIRS-iscsi := scsi
 DEPDIRS-nbd := bdev
-DEPDIRS-ublk := bdev iobuf
-DEPDIRS-nvmf := bdev accel iobuf
+DEPDIRS-ublk := bdev
+DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost_scsi := scsi
-DEPDIRS-vfu_tgt := bdev scsi
-ifeq ($(CONFIG_FSDEV),y)
-DEPDIRS-vfu_tgt += fsdev
-endif
 
 .PHONY: all clean $(DIRS-y)
 

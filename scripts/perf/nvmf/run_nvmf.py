@@ -7,34 +7,33 @@
 # Note: we use setattr
 # pylint: disable=no-member
 
-import argparse
-import configparser
-import inspect
-import itertools
-import json
-import logging
 import os
 import re
-import shutil
-import subprocess
 import sys
+import argparse
+import json
+import inspect
+import logging
+import zipfile
 import threading
+import subprocess
+import itertools
+import configparser
 import time
 import uuid
-import zipfile
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from subprocess import CalledProcessError
-from typing import Any
 
-import pandas as pd
 import paramiko
+import pandas as pd
+from common import *
+from subprocess import CalledProcessError
+from abc import abstractmethod, ABC
+from dataclasses import dataclass
+from typing import Any
 
 sys.path.append(os.path.dirname(__file__) + '/../../../python')
 
-from common import parse_results
-from spdk.rpc.client import JSONRPCClient
-from spdk.rpc.cmd_parser import print_dict
+import spdk.rpc as rpc  # noqa
+import spdk.rpc.client as rpc_client  # noqa
 
 
 @dataclass
@@ -61,7 +60,7 @@ class Server(ABC):
             ConfigField(name='transport', required=True),
             ConfigField(name='skip_spdk_install', default=False),
             ConfigField(name='irdma_roce_enable', default=False),
-            ConfigField(name='pause_frames', default=None),
+            ConfigField(name='pause_frames', default=None)
         ]
 
         self.read_config(config_fields, general_config)
@@ -72,7 +71,7 @@ class Server(ABC):
             ConfigField(name='mode', required=True),
             ConfigField(name='irq_scripts_dir', default='/usr/src/local/mlnx-tools/ofed_scripts'),
             ConfigField(name='enable_arfs', default=False),
-            ConfigField(name='tuned_profile', default=''),
+            ConfigField(name='tuned_profile', default='')
         ]
         self.read_config(config_fields, server_config)
 
@@ -347,6 +346,7 @@ class Server(ABC):
             try:
                 self.exec_cmd(["sudo", "ethtool", "-K", nic,
                                "hw-tc-offload", "on"])  # Enable hardware TC offload
+                nic_bdf = self.exec_cmd(["bash", "-c", "source /sys/class/net/%s/device/uevent; echo $PCI_SLOT_NAME" % nic])
                 self.exec_cmd(["sudo", "ethtool", "--set-priv-flags", nic, "fw-lldp-agent", "off"])  # Disable LLDP
                 self.exec_cmd(["sudo", "ethtool", "--set-priv-flags", nic, "channel-pkt-inspect-optimize", "off"])
                 # Following are suggested in ADQ Configuration Guide to be enabled for large block sizes,
@@ -370,7 +370,7 @@ class Server(ABC):
             "firewalld": "inactive",
             "irqbalance": "inactive",
             "lldpad.service": "inactive",
-            "lldpad.socket": "inactive",
+            "lldpad.socket": "inactive"
         }
 
         for service in svc_target_state:
@@ -410,7 +410,7 @@ class Server(ABC):
             "net.ipv4.tcp_wmem": "8192 1048576 33554432",
             "net.ipv4.route.flush": 1,
             "vm.overcommit_memory": 1,
-            "net.core.rps_sock_flow_entries": 0,
+            "net.core.rps_sock_flow_entries": 0
         }
 
         if self.enable_adq:
@@ -444,7 +444,7 @@ class Server(ABC):
 
             self.tuned_restore_dict = {
                 "profile": profile,
-                "mode": profile_mode,
+                "mode": profile_mode
             }
 
         self.exec_cmd(["sudo", "systemctl", "start", service])
@@ -548,12 +548,12 @@ class Server(ABC):
             r"CPU\d+: Core temperature is above threshold, cpu clock is throttled",
             r"mlx5_core \S+: poll_health:\d+:\(pid \d+\): device's health compromised",
             r"mlx5_core \S+: print_health_info:\d+:\(pid \d+\): Health issue observed, High temperature",
-            r"mlx5_core \S+: temp_warn:\d+:\(pid \d+\): High temperature on sensors",
+            r"mlx5_core \S+: temp_warn:\d+:\(pid \d+\): High temperature on sensors"
         ]
 
         issue_found = False
         try:
-            output = self.exec_cmd(["sudo", "dmesg"])
+            output = self.exec_cmd(["dmesg"])
 
             for line in output.split("\n"):
                 for pattern in patterns:
@@ -588,7 +588,7 @@ class Target(Server):
             ConfigField(name='enable_pm', default=True),
             ConfigField(name='enable_sar', default=True),
             ConfigField(name='enable_pcm', default=True),
-            ConfigField(name='enable_dpdk_memory', default=True),
+            ConfigField(name='enable_dpdk_memory', default=True)
         ]
         self.read_config(config_fields, target_config)
 
@@ -630,7 +630,7 @@ class Target(Server):
             os.chdir(change_dir)
             self.log.info("Changing directory to %s" % change_dir)
 
-        out = subprocess.check_output(cmd, stderr=stderr_opt).decode(encoding="utf-8")
+        out = check_output(cmd, stderr=stderr_opt).decode(encoding="utf-8")
 
         if change_dir:
             os.chdir(old_cwd)
@@ -733,8 +733,8 @@ class Target(Server):
         self.log.info("INFO: waiting to generate DPDK memory usage")
         time.sleep(ramp_time)
         self.log.info("INFO: generating DPDK memory usage")
-        tmp_dump_file = self.client.env_dpdk_get_mem_stats()["filename"]
-        shutil.move(tmp_dump_file, os.path.join(results_dir, dump_file_name))
+        tmp_dump_file = rpc.env_dpdk.env_dpdk_get_mem_stats(self.client)["filename"]
+        os.rename(tmp_dump_file, "%s/%s" % (results_dir, dump_file_name))
 
     def sys_config(self):
         self.log.info("====Kernel release:====")
@@ -770,7 +770,7 @@ class Initiator(Server):
             ConfigField(name='fio_bin', default='/usr/src/fio/fio'),
             ConfigField(name='nvmecli_bin', default='nvme'),
             ConfigField(name='cpu_frequency', default=None),
-            ConfigField(name='allow_cpu_sharing', default=True),
+            ConfigField(name='allow_cpu_sharing', default=True)
         ]
 
         self.read_config(config_fields, initiator_config)
@@ -1101,19 +1101,19 @@ class KernelTarget(Target):
                 "attr": {
                     "allow_any_host": "1",
                     "serial": serial,
-                    "version": "1.3",
+                    "version": "1.3"
                 },
                 "namespaces": [
                     {
                         "device": {
                             "path": bdev_name,
-                            "uuid": "%s" % uuid.uuid4(),
+                            "uuid": "%s" % uuid.uuid4()
                         },
                         "enable": 1,
-                        "nsid": port,
-                    },
+                        "nsid": port
+                    }
                 ],
-                "nqn": nqn,
+                "nqn": nqn
             })
 
             nvmet_cfg["ports"].append({
@@ -1121,11 +1121,11 @@ class KernelTarget(Target):
                     "adrfam": "ipv4",
                     "traddr": ip,
                     "trsvcid": port,
-                    "trtype": self.transport,
+                    "trtype": self.transport
                 },
                 "portid": bdev_num,
                 "referrals": [],
-                "subsystems": [nqn],
+                "subsystems": [nqn]
             })
 
             self.subsystem_info_list.append((port, nqn, ip))
@@ -1178,7 +1178,7 @@ class SPDKTarget(Target):
             ConfigField(name='iobuf_small_pool_count', default=32767),
             ConfigField(name='iobuf_large_pool_count', default=16383),
             ConfigField(name='num_cqe', default=4096),
-            ConfigField(name='sock_impl', default='posix'),
+            ConfigField(name='sock_impl', default='posix')
         ]
 
         self.read_config(config_fields, target_config)
@@ -1234,20 +1234,21 @@ class SPDKTarget(Target):
 
         # Create transport layer
         nvmf_transport_params = {
+            "client": self.client,
             "trtype": self.transport,
             "num_shared_buffers": self.num_shared_buffers,
             "max_queue_depth": self.max_queue_depth,
             "dif_insert_or_strip": self.dif_insert_strip,
             "sock_priority": self.adq_priority,
-            "num_cqe": self.num_cqe,
+            "num_cqe": self.num_cqe
         }
 
         if self.enable_adq:
             nvmf_transport_params["acceptor_poll_rate"] = 10000
 
-        self.client.nvmf_create_transport(**nvmf_transport_params)
+        rpc.nvmf.nvmf_create_transport(**nvmf_transport_params)
         self.log.info("SPDK NVMeOF transport layer:")
-        print_dict(self.client.nvmf_get_transports())
+        rpc_client.print_dict(rpc.nvmf.nvmf_get_transports(self.client))
 
         if self.null_block:
             self.spdk_tgt_add_nullblock(self.null_block)
@@ -1270,11 +1271,10 @@ class SPDKTarget(Target):
         self.log.info("Adding null block bdevices to config via RPC")
         for i in range(null_block_count):
             self.log.info("Setting bdev protection to :%s" % self.null_block_dif_type)
-            self.client.bdev_null_create(num_blocks=102400, block_size=block_size, name="Nvme{}n1".format(i),
-                                         dif_type=self.null_block_dif_type, md_size=md_size)
-
+            rpc.bdev.bdev_null_create(self.client, 102400, block_size, "Nvme{}n1".format(i),
+                                      dif_type=self.null_block_dif_type, md_size=md_size)
         self.log.info("SPDK Bdevs configuration:")
-        print_dict(self.client.bdev_get_bdevs())
+        rpc_client.print_dict(rpc.bdev.bdev_get_bdevs(self.client))
 
     def spdk_tgt_add_nvme_conf(self, req_num_disks=None):
         self.log.info("Adding NVMe bdevs to config via RPC")
@@ -1290,10 +1290,10 @@ class SPDKTarget(Target):
                 bdfs = bdfs[0:req_num_disks]
 
         for i, bdf in enumerate(bdfs):
-            self.client.bdev_nvme_attach_controller(name="Nvme%s" % i, trtype="PCIe", traddr=bdf)
+            rpc.bdev.bdev_nvme_attach_controller(self.client, name="Nvme%s" % i, trtype="PCIe", traddr=bdf)
 
         self.log.info("SPDK Bdevs configuration:")
-        print_dict(self.client.bdev_get_bdevs())
+        rpc_client.print_dict(rpc.bdev.bdev_get_bdevs(self.client))
 
     def spdk_tgt_add_subsystem_conf(self, ips=None, req_num_disks=None):
         self.log.info("Adding subsystems to config")
@@ -1306,22 +1306,21 @@ class SPDKTarget(Target):
             serial = "SPDK00%s" % bdev_num
             bdev_name = "Nvme%sn1" % bdev_num
 
-            self.client.nvmf_create_subsystem(nqn=nqn, serial_number=serial,
-                                              allow_any_host=True, max_namespaces=8)
-            self.client.nvmf_subsystem_add_ns(nqn=nqn, namespace=dict(bdev_name=bdev_name))
-            for nqn_name in [nqn, "nqn.2014-08.org.nvmexpress.discovery"]:
-                self.client.nvmf_subsystem_add_listener(nqn=nqn_name,
-                                                        listen_address=dict(
-                                                            trtype=self.transport,
-                                                            traddr=ip,
-                                                            trsvcid=port,
-                                                            adrfam="ipv4"),
-                                                        )
+            rpc.nvmf.nvmf_create_subsystem(self.client, nqn, serial,
+                                           allow_any_host=True, max_namespaces=8)
+            rpc.nvmf.nvmf_subsystem_add_ns(client=self.client, nqn=nqn, bdev_name=bdev_name)
+            for nqn_name in [nqn, "discovery"]:
+                rpc.nvmf.nvmf_subsystem_add_listener(self.client,
+                                                     nqn=nqn_name,
+                                                     trtype=self.transport,
+                                                     traddr=ip,
+                                                     trsvcid=port,
+                                                     adrfam="ipv4")
             self.subsystem_info_list.append((port, nqn, ip))
         self.subsys_no = len(self.subsystem_info_list)
 
         self.log.info("SPDK NVMeOF subsystem configuration:")
-        print_dict(self.client.nvmf_get_subsystems())
+        rpc_client.print_dict(rpc.nvmf.nvmf_get_subsystems(self.client))
 
     def bpf_start(self):
         self.log.info("Starting BPF Trace scripts: %s" % self.bpf_scripts)
@@ -1355,31 +1354,32 @@ class SPDKTarget(Target):
             if os.path.exists("/var/tmp/spdk.sock"):
                 break
             time.sleep(1)
-        self.client = JSONRPCClient("/var/tmp/spdk.sock")
+        self.client = rpc_client.JSONRPCClient("/var/tmp/spdk.sock")
 
-        self.client.sock_set_default_impl(impl_name=self.sock_impl)
-        self.client.iobuf_set_options(small_pool_count=self.iobuf_small_pool_count,
-                                      large_pool_count=self.iobuf_large_pool_count,
-                                      small_bufsize=None,
-                                      large_bufsize=None)
+        rpc.sock.sock_set_default_impl(self.client, impl_name=self.sock_impl)
+        rpc.iobuf.iobuf_set_options(self.client,
+                                    small_pool_count=self.iobuf_small_pool_count,
+                                    large_pool_count=self.iobuf_large_pool_count,
+                                    small_bufsize=None,
+                                    large_bufsize=None)
 
         if self.enable_zcopy:
-            self.client.sock_impl_set_options(impl_name=self.sock_impl,
-                                              enable_zerocopy_send_server=True)
+            rpc.sock.sock_impl_set_options(self.client, impl_name=self.sock_impl,
+                                           enable_zerocopy_send_server=True)
             self.log.info("Target socket options:")
-            print_dict(self.client.sock_impl_get_options(impl_name=self.sock_impl))
+            rpc_client.print_dict(rpc.sock.sock_impl_get_options(self.client, impl_name=self.sock_impl))
 
         if self.enable_adq:
-            self.client.sock_impl_set_options(impl_name=self.sock_impl, enable_placement_id=1)
-            self.client.bdev_nvme_set_options(timeout_us=0, action_on_timeout=None,
-                                              nvme_adminq_poll_period_us=100000, retry_count=4)
+            rpc.sock.sock_impl_set_options(self.client, impl_name=self.sock_impl, enable_placement_id=1)
+            rpc.bdev.bdev_nvme_set_options(self.client, timeout_us=0, action_on_timeout=None,
+                                           nvme_adminq_poll_period_us=100000, retry_count=4)
 
         if self.enable_dsa:
-            self.client.dsa_scan_accel_module(config_kernel_mode=None)
+            rpc.dsa.dsa_scan_accel_module(self.client, config_kernel_mode=None)
             self.log.info("Target DSA accel module enabled")
 
-        self.client.framework_set_scheduler(name=self.scheduler_name, core_limit=self.scheduler_core_limit)
-        self.client.framework_start_init()
+        rpc.app.framework_set_scheduler(self.client, name=self.scheduler_name, core_limit=self.scheduler_core_limit)
+        rpc.framework_start_init(self.client)
 
         if self.bpf_scripts:
             self.bpf_start()
@@ -1463,7 +1463,7 @@ class KernelInitiator(Initiator):
             block_sysfs_settings = {
                 "iostats": "0",
                 "rq_affinity": "0",
-                "nomerges": "2",
+                "nomerges": "2"
             }
 
             for disk in self.get_connected_nvme_list():
@@ -1589,7 +1589,7 @@ class SPDKInitiator(Initiator):
             "subsystems": [
                 {
                     "subsystem": "bdev",
-                    "config": [],
+                    "config": []
                 },
                 {
                     "subsystem": "iobuf",
@@ -1598,10 +1598,10 @@ class SPDKInitiator(Initiator):
                             "method": "iobuf_set_options",
                             "params": {
                                 "small_pool_count": self.small_pool_count,
-                                "large_pool_count": self.large_pool_count,
-                            },
-                        },
-                    ],
+                                "large_pool_count": self.large_pool_count
+                            }
+                        }
+                    ]
                 },
                 {
                     "subsystem": "sock",
@@ -1609,12 +1609,12 @@ class SPDKInitiator(Initiator):
                         {
                             "method": "sock_set_default_impl",
                             "params": {
-                                "impl_name": self.sock_impl,
-                            },
-                        },
-                    ],
-                },
-            ],
+                                "impl_name": self.sock_impl
+                            }
+                        }
+                    ]
+                }
+            ]
         }
 
         for i, subsys in enumerate(remote_subsystem_list):
@@ -1627,8 +1627,8 @@ class SPDKInitiator(Initiator):
                     "traddr": sub_addr,
                     "trsvcid": sub_port,
                     "subnqn": sub_nqn,
-                    "adrfam": "IPv4",
-                },
+                    "adrfam": "IPv4"
+                }
             }
 
             if self.enable_adq:
@@ -1853,7 +1853,7 @@ if __name__ == "__main__":
                 "rate_iops": data[k].get("rate_iops", 0),
                 "offset": data[k].get("offset", False),
                 "offset_inc": data[k].get("offset_inc", 0),
-                "numa_align": data[k].get("numa_align", 1),
+                "numa_align": data[k].get("numa_align", 1)
             }
         else:
             continue
@@ -1865,7 +1865,7 @@ if __name__ == "__main__":
 
     for i in initiators:
         target_obj.initiator_info.append(
-            {"name": i.name, "target_nic_ips": i.target_nic_ips, "initiator_nic_ips": i.nic_ips},
+            {"name": i.name, "target_nic_ips": i.target_nic_ips, "initiator_nic_ips": i.nic_ips}
         )
 
     try:
@@ -1888,6 +1888,6 @@ if __name__ == "__main__":
             except CpuThrottlingError as err:
                 logging.error(err)
                 exit_code = 1
-            except Exception:
+            except Exception as err:
                 pass
         sys.exit(exit_code)

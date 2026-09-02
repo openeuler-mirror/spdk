@@ -139,14 +139,6 @@ nvme_ctrlr_multi_iocs_enabled(struct spdk_nvme_ctrlr *ctrlr)
 	       ctrlr->opts.command_set == SPDK_NVME_CC_CSS_IOCS;
 }
 
-static bool
-nvme_ctrlr_nvm_iocs_enabled(struct spdk_nvme_ctrlr *ctrlr)
-{
-	return ctrlr->cap.bits.css & SPDK_NVME_CAP_CSS_NVM &&
-	       (ctrlr->opts.command_set == SPDK_NVME_CC_CSS_NVM ||
-		ctrlr->opts.command_set == SPDK_NVME_CC_CSS_IOCS);
-}
-
 /* When the field in spdk_nvme_ctrlr_opts are changed and you change this function, please
  * also update the nvme_ctrl_opts_init function in nvme_ctrlr.c
  */
@@ -598,7 +590,6 @@ int
 spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 {
 	struct spdk_nvme_ctrlr *ctrlr;
-	int rc;
 
 	if (qpair == NULL) {
 		return 0;
@@ -617,29 +608,17 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 		return 0;
 	}
 
+	if (qpair->auth.cb_fn != NULL) {
+		qpair->auth.cb_fn(qpair->auth.cb_ctx, -ECANCELED);
+		qpair->auth.cb_fn = NULL;
+	}
+
+	qpair->destroy_in_progress = 1;
+
 	nvme_transport_ctrlr_disconnect_qpair(ctrlr, qpair);
 
-	/* For async qpairs, the disconnect may not complete immediately. Poll until the qpair
-	 * reaches the DISCONNECTED state to ensure the poll group can be removed without error.
-	 * This prevents resource leaks when spdk_nvme_poll_group_remove() checks the qpair state.
-	 */
-	while (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
-		spdk_nvme_qpair_process_completions(qpair, 0);
-	}
-
-	if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTED) {
-		NVME_CTRLR_ERRLOG(ctrlr, "qpair is not in DISCONNECTED state: state=%d\n",
-				  nvme_qpair_get_state(qpair));
-		return 0;
-	}
-
 	if (qpair->poll_group && (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr))) {
-		rc = spdk_nvme_poll_group_remove(qpair->poll_group->group, qpair);
-		if (rc != 0) {
-			NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_poll_group_remove() failed: rc=%s\n",
-					  spdk_strerror(abs(rc)));
-			return 0;
-		}
+		spdk_nvme_poll_group_remove(qpair->poll_group->group, qpair);
 	}
 
 	/* Do not retry. */
@@ -752,18 +731,10 @@ nvme_ctrlr_set_intel_support_log_pages(struct spdk_nvme_ctrlr *ctrlr)
 static int
 nvme_ctrlr_alloc_ana_log_page(struct spdk_nvme_ctrlr *ctrlr)
 {
-	struct spdk_nvme_ns *ns;
 	uint32_t ana_log_page_size;
-	uint32_t active_ns_count = 0;
-
-	RB_FOREACH(ns, nvme_ns_tree, &ctrlr->ns) {
-		if (ns->active) {
-			active_ns_count++;
-		}
-	}
 
 	ana_log_page_size = sizeof(struct spdk_nvme_ana_page) + ctrlr->cdata.nanagrpid *
-			    sizeof(struct spdk_nvme_ana_group_descriptor) + active_ns_count *
+			    sizeof(struct spdk_nvme_ana_group_descriptor) + ctrlr->active_ns_count *
 			    sizeof(uint32_t);
 
 	/* Number of active namespaces may have changed.
@@ -908,11 +879,11 @@ nvme_ctrlr_set_supported_log_pages(struct spdk_nvme_ctrlr *ctrlr)
 	ctrlr->log_page_supported[SPDK_NVME_LOG_ERROR] = true;
 	ctrlr->log_page_supported[SPDK_NVME_LOG_HEALTH_INFORMATION] = true;
 	ctrlr->log_page_supported[SPDK_NVME_LOG_FIRMWARE_SLOT] = true;
-	if (ctrlr->cdata.lpa.cses) {
+	if (ctrlr->cdata.lpa.celp) {
 		ctrlr->log_page_supported[SPDK_NVME_LOG_COMMAND_EFFECTS_LOG] = true;
 	}
 
-	if (ctrlr->cdata.cmic.anars) {
+	if (ctrlr->cdata.cmic.ana_reporting) {
 		ctrlr->log_page_supported[SPDK_NVME_LOG_ASYMMETRIC_NAMESPACE_ACCESS] = true;
 		if (!ctrlr->opts.disable_read_ana_log_page) {
 			rc = nvme_ctrlr_update_ana_log_page(ctrlr);
@@ -923,7 +894,7 @@ nvme_ctrlr_set_supported_log_pages(struct spdk_nvme_ctrlr *ctrlr)
 		}
 	}
 
-	if (ctrlr->cdata.ctratt.fdps) {
+	if (ctrlr->cdata.ctratt.bits.fdps) {
 		ctrlr->log_page_supported[SPDK_NVME_LOG_FDP_CONFIGURATIONS] = true;
 		ctrlr->log_page_supported[SPDK_NVME_LOG_RECLAIM_UNIT_HANDLE_USAGE] = true;
 		ctrlr->log_page_supported[SPDK_NVME_LOG_FDP_STATISTICS] = true;
@@ -1063,7 +1034,7 @@ nvme_ctrlr_set_host_feature(struct spdk_nvme_ctrlr *ctrlr)
 	struct spdk_nvme_host_behavior *host;
 	int rc;
 
-	if (!ctrlr->cdata.ctratt.elbas) {
+	if (!ctrlr->cdata.ctratt.bits.elbas) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_DB_BUF_CFG,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
@@ -1486,22 +1457,14 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
 		return "set keep alive timeout";
 	case NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT:
 		return "wait for set keep alive timeout";
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC:
-		return "identify controller iocs nvm specific";
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_NVM_SPECIFIC:
-		return "wait for identify controller iocs nvm specific";
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_ZNS_SPECIFIC:
-		return "identify controller iocs zns specific";
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_ZNS_SPECIFIC:
-		return "wait for identify controller iocs zns specific";
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC:
+		return "identify controller iocs specific";
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC:
+		return "wait for identify controller iocs specific";
 	case NVME_CTRLR_STATE_GET_ZNS_CMD_EFFECTS_LOG:
 		return "get zns cmd and effects log page";
 	case NVME_CTRLR_STATE_WAIT_FOR_GET_ZNS_CMD_EFFECTS_LOG:
 		return "wait for get zns cmd and effects log page";
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_KV_SPECIFIC:
-		return "identify controller iocs kv specific";
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_KV_SPECIFIC:
-		return "wait for identify controller iocs kv specific";
 	case NVME_CTRLR_STATE_SET_NUM_QUEUES:
 		return "set number of queues";
 	case NVME_CTRLR_STATE_WAIT_FOR_SET_NUM_QUEUES:
@@ -1624,25 +1587,9 @@ nvme_ctrlr_free_zns_specific_data(struct spdk_nvme_ctrlr *ctrlr)
 }
 
 static void
-nvme_ctrlr_free_nvm_specific_data(struct spdk_nvme_ctrlr *ctrlr)
-{
-	spdk_free(ctrlr->cdata_nvm);
-	ctrlr->cdata_nvm = NULL;
-}
-
-static void
-nvme_ctrlr_free_kv_specific_data(struct spdk_nvme_ctrlr *ctrlr)
-{
-	spdk_free(ctrlr->cdata_kv);
-	ctrlr->cdata_kv = NULL;
-}
-
-static void
 nvme_ctrlr_free_iocs_specific_data(struct spdk_nvme_ctrlr *ctrlr)
 {
 	nvme_ctrlr_free_zns_specific_data(ctrlr);
-	nvme_ctrlr_free_nvm_specific_data(ctrlr);
-	nvme_ctrlr_free_kv_specific_data(ctrlr);
 }
 
 static void
@@ -1679,7 +1626,7 @@ nvme_ctrlr_set_doorbell_buffer_config(struct spdk_nvme_ctrlr *ctrlr)
 	int rc = 0;
 	uint64_t prp1, prp2, len;
 
-	if (!ctrlr->cdata.oacs.dbcs) {
+	if (!ctrlr->cdata.oacs.doorbell_buffer_config) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_HOST_ID,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
@@ -2164,17 +2111,17 @@ nvme_ctrlr_identify_done(void *arg, const struct spdk_nvme_cpl *cpl)
 		ctrlr->flags |= SPDK_NVME_CTRLR_MPTR_SGL_SUPPORTED;
 	}
 
-	if (ctrlr->cdata.oacs.ssrs && !(ctrlr->quirks & NVME_QUIRK_OACS_SECURITY)) {
+	if (ctrlr->cdata.oacs.security && !(ctrlr->quirks & NVME_QUIRK_OACS_SECURITY)) {
 		ctrlr->flags |= SPDK_NVME_CTRLR_SECURITY_SEND_RECV_SUPPORTED;
 	}
 
-	if (ctrlr->cdata.oacs.dirs) {
+	if (ctrlr->cdata.oacs.directives) {
 		ctrlr->flags |= SPDK_NVME_CTRLR_DIRECTIVES_SUPPORTED;
 	}
 
 	NVME_CTRLR_DEBUGLOG(ctrlr, "fuses compare and write: %d\n",
-			    ctrlr->cdata.fuses.fcws);
-	if (ctrlr->cdata.fuses.fcws) {
+			    ctrlr->cdata.fuses.compare_and_write);
+	if (ctrlr->cdata.fuses.compare_and_write) {
 		ctrlr->flags |= SPDK_NVME_CTRLR_COMPARE_AND_WRITE_SUPPORTED;
 	}
 
@@ -2223,8 +2170,7 @@ nvme_ctrlr_get_zns_cmd_and_effects_log_done(void *arg, const struct spdk_nvme_cp
 	spdk_free(ctrlr->tmp_ptr);
 	ctrlr->tmp_ptr = NULL;
 
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_KV_SPECIFIC,
-			     ctrlr->opts.admin_timeout_ms);
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_NUM_QUEUES, ctrlr->opts.admin_timeout_ms);
 }
 
 static int
@@ -2266,8 +2212,9 @@ nvme_ctrlr_identify_zns_specific_done(void *arg, const struct spdk_nvme_cpl *cpl
 	struct spdk_nvme_ctrlr *ctrlr = (struct spdk_nvme_ctrlr *)arg;
 
 	if (spdk_nvme_cpl_is_error(cpl)) {
+		/* no need to print an error, the controller simply does not support ZNS */
 		nvme_ctrlr_free_zns_specific_data(ctrlr);
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_KV_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_NUM_QUEUES,
 				     ctrlr->opts.admin_timeout_ms);
 		return;
 	}
@@ -2284,30 +2231,35 @@ nvme_ctrlr_identify_zns_specific_done(void *arg, const struct spdk_nvme_cpl *cpl
 			     ctrlr->opts.admin_timeout_ms);
 }
 
-static void
-nvme_ctrlr_identify_kv_specific_done(void *arg, const struct spdk_nvme_cpl *cpl)
-{
-	struct spdk_nvme_ctrlr *ctrlr = (struct spdk_nvme_ctrlr *)arg;
-
-	if (spdk_nvme_cpl_is_error(cpl)) {
-		nvme_ctrlr_free_kv_specific_data(ctrlr);
-	}
-
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_NUM_QUEUES,
-			     ctrlr->opts.admin_timeout_ms);
-}
-
+/**
+ * This function will try to fetch the I/O Command Specific Controller data structure for
+ * each I/O Command Set supported by SPDK.
+ *
+ * If an I/O Command Set is not supported by the controller, "Invalid Field in Command"
+ * will be returned. Since we are fetching in a exploratively way, getting an error back
+ * from the controller should not be treated as fatal.
+ *
+ * I/O Command Sets not supported by SPDK will be skipped (e.g. Key Value Command Set).
+ *
+ * I/O Command Sets without a IOCS specific data structure (i.e. a zero-filled IOCS specific
+ * data structure) will be skipped (e.g. NVM Command Set, Key Value Command Set).
+ */
 static int
-nvme_ctrlr_identify_iocs_zns_specific(struct spdk_nvme_ctrlr *ctrlr)
+nvme_ctrlr_identify_iocs_specific(struct spdk_nvme_ctrlr *ctrlr)
 {
 	int	rc;
 
 	if (!nvme_ctrlr_multi_iocs_enabled(ctrlr)) {
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_KV_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_NUM_QUEUES,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
 
+	/*
+	 * Since SPDK currently only needs to fetch a single Command Set, keep the code here,
+	 * instead of creating multiple NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC substates,
+	 * which would require additional functions and complexity for no good reason.
+	 */
 	assert(!ctrlr->cdata_zns);
 	ctrlr->cdata_zns = spdk_zmalloc(sizeof(*ctrlr->cdata_zns), 64, NULL, SPDK_ENV_NUMA_ID_ANY,
 					SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
@@ -2316,7 +2268,7 @@ nvme_ctrlr_identify_iocs_zns_specific(struct spdk_nvme_ctrlr *ctrlr)
 		goto error;
 	}
 
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_ZNS_SPECIFIC,
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC,
 			     ctrlr->opts.admin_timeout_ms);
 
 	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_CTRLR_IOCS, 0, 0, SPDK_NVME_CSI_ZNS,
@@ -2331,93 +2283,6 @@ nvme_ctrlr_identify_iocs_zns_specific(struct spdk_nvme_ctrlr *ctrlr)
 error:
 	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
 	nvme_ctrlr_free_zns_specific_data(ctrlr);
-	return rc;
-}
-
-static int
-nvme_ctrlr_identify_iocs_kv_specific(struct spdk_nvme_ctrlr *ctrlr)
-{
-	int	rc;
-
-	if (!nvme_ctrlr_multi_iocs_enabled(ctrlr)) {
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_SET_NUM_QUEUES,
-				     ctrlr->opts.admin_timeout_ms);
-		return 0;
-	}
-
-	assert(!ctrlr->cdata_kv);
-	ctrlr->cdata_kv = spdk_zmalloc(sizeof(*ctrlr->cdata_kv), 64, NULL, SPDK_ENV_NUMA_ID_ANY,
-				       SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
-	if (!ctrlr->cdata_kv) {
-		rc = -ENOMEM;
-		goto error;
-	}
-
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_KV_SPECIFIC,
-			     ctrlr->opts.admin_timeout_ms);
-
-	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_CTRLR_IOCS, 0, 0, SPDK_NVME_CSI_KV,
-				     ctrlr->cdata_kv, sizeof(*ctrlr->cdata_kv),
-				     nvme_ctrlr_identify_kv_specific_done, ctrlr);
-	if (rc != 0) {
-		goto error;
-	}
-
-	return 0;
-
-error:
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
-	nvme_ctrlr_free_kv_specific_data(ctrlr);
-	return rc;
-}
-
-static void
-nvme_ctrlr_identify_nvm_specific_done(void *arg, const struct spdk_nvme_cpl *cpl)
-{
-	struct spdk_nvme_ctrlr *ctrlr = (struct spdk_nvme_ctrlr *)arg;
-
-	if (spdk_nvme_cpl_is_error(cpl)) {
-		nvme_ctrlr_free_nvm_specific_data(ctrlr);
-	}
-
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_ZNS_SPECIFIC,
-			     ctrlr->opts.admin_timeout_ms);
-}
-
-static int
-nvme_ctrlr_identify_iocs_nvm_specific(struct spdk_nvme_ctrlr *ctrlr)
-{
-	int	rc;
-
-	if (!nvme_ctrlr_nvm_iocs_enabled(ctrlr)) {
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_ZNS_SPECIFIC,
-				     ctrlr->opts.admin_timeout_ms);
-		return 0;
-	}
-
-	assert(!ctrlr->cdata_nvm);
-	ctrlr->cdata_nvm = spdk_zmalloc(sizeof(*ctrlr->cdata_nvm), 64, NULL, SPDK_ENV_NUMA_ID_ANY,
-					SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
-	if (!ctrlr->cdata_nvm) {
-		rc = -ENOMEM;
-		goto error;
-	}
-
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_NVM_SPECIFIC,
-			     ctrlr->opts.admin_timeout_ms);
-
-	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_CTRLR_IOCS, 0, 0, SPDK_NVME_CSI_NVM,
-				     ctrlr->cdata_nvm, sizeof(*ctrlr->cdata_nvm),
-				     nvme_ctrlr_identify_nvm_specific_done, ctrlr);
-	if (rc != 0) {
-		goto error;
-	}
-
-	return 0;
-
-error:
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
-	nvme_ctrlr_free_nvm_specific_data(ctrlr);
 	return rc;
 }
 
@@ -2476,72 +2341,96 @@ nvme_active_ns_ctx_destroy(struct nvme_active_ns_ctx *ctx)
 	free(ctx);
 }
 
-/* Returns true if the identify flow should be terminated, false otherwise. */
-static bool
-nvme_ctrlr_handle_identify_ns_completion(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns,
-		const struct spdk_nvme_cpl *cpl)
+static int
+nvme_ctrlr_destruct_namespace(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
 {
-	/* A namespace becoming inactive during NVMe controller initialization should not be
-	 * considered a fatal error leading to controller state machine failure. */
-	if (spdk_nvme_cpl_is_error(cpl)) {
-		if (cpl->status.sct == SPDK_NVME_SCT_GENERIC &&
-		    (cpl->status.sc == SPDK_NVME_SC_INVALID_NAMESPACE_OR_FORMAT ||
-		     cpl->status.sc == SPDK_NVME_SC_INVALID_FIELD)) {
-			NVME_CTRLR_DEBUGLOG(ctrlr, "Namespace inactive due to identify completion error\n");
-			nvme_ns_clear(ns);
-		} else {
-			return true;
-		}
+	struct spdk_nvme_ns tmp, *ns;
+
+	assert(ctrlr != NULL);
+
+	tmp.id = nsid;
+	ns = RB_FIND(nvme_ns_tree, &ctrlr->ns, &tmp);
+	if (ns == NULL) {
+		return -EINVAL;
 	}
 
-	return false;
+	nvme_ns_destruct(ns);
+	ns->active = false;
+
+	return 0;
+}
+
+static int
+nvme_ctrlr_construct_namespace(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
+{
+	struct spdk_nvme_ns *ns;
+
+	if (nsid < 1 || nsid > ctrlr->cdata.nn) {
+		return -EINVAL;
+	}
+
+	/* Namespaces are constructed on demand, so simply request it. */
+	ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+	if (ns == NULL) {
+		return -ENOMEM;
+	}
+
+	ns->active = true;
+
+	return 0;
 }
 
 static void
 nvme_ctrlr_identify_active_ns_swap(struct spdk_nvme_ctrlr *ctrlr, uint32_t *new_ns_list,
 				   size_t max_entries)
 {
-	size_t i = 0;
+	uint32_t active_ns_count = 0;
+	size_t i;
 	uint32_t nsid;
 	struct spdk_nvme_ns *ns, *tmp_ns;
+	int rc;
 
-	/* First, remove namespaces that no longer exist. List must be in ascending NSID order. */
+	/* First, remove namespaces that no longer exist */
 	RB_FOREACH_SAFE(ns, nvme_ns_tree, &ctrlr->ns, tmp_ns) {
-		while (i < max_entries && new_ns_list[i] && new_ns_list[i] < ns->id) {
-			i++;
+		nsid = new_ns_list[0];
+		active_ns_count = 0;
+		while (nsid != 0) {
+			if (nsid == ns->id) {
+				break;
+			}
+
+			nsid = new_ns_list[active_ns_count++];
 		}
 
-		if (i < max_entries && new_ns_list[i] == ns->id) {
-			i++;
-			continue;
+		if (nsid != ns->id) {
+			/* Did not find this namespace id in the new list. */
+			NVME_CTRLR_DEBUGLOG(ctrlr, "Namespace %u was removed\n", ns->id);
+			nvme_ctrlr_destruct_namespace(ctrlr, ns->id);
 		}
-
-		/* Did not find this namespace id in the new list. */
-		NVME_CTRLR_DEBUGLOG(ctrlr, "Namespace %u was removed\n", ns->id);
-		nvme_ns_clear(ns);
 	}
 
 	/* Next, add new namespaces */
+	active_ns_count = 0;
 	for (i = 0; i < max_entries; i++) {
-		nsid = new_ns_list[i];
+		nsid = new_ns_list[active_ns_count];
 
 		if (nsid == 0) {
 			break;
 		}
 
-		assert(i == 0 || nsid > new_ns_list[i - 1]);
-
 		/* If the namespace already exists, this will not construct it a second time. */
-		ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
-		if (!ns) {
+		rc = nvme_ctrlr_construct_namespace(ctrlr, nsid);
+		if (rc != 0) {
 			/* We can't easily handle a failure here. But just move on. */
 			assert(false);
 			NVME_CTRLR_DEBUGLOG(ctrlr, "Failed to allocate a namespace object.\n");
 			continue;
 		}
 
-		ns->identify_pending = true;
+		active_ns_count++;
 	}
+
+	ctrlr->active_ns_count = active_ns_count;
 }
 
 static void
@@ -2704,11 +2593,6 @@ nvme_ctrlr_identify_active_ns(struct spdk_nvme_ctrlr *ctrlr)
 	}
 
 	nvme_ctrlr_identify_active_ns_async(ctx);
-	if (ctx->state == NVME_ACTIVE_NS_STATE_ERROR) {
-		nvme_active_ns_ctx_destroy(ctx);
-		return -ENXIO;
-	}
-
 	rc = nvme_wait_for_adminq_completion(ctrlr, &ctx->status, false);
 	if (rc || ctx->state == NVME_ACTIVE_NS_STATE_ERROR) {
 		if (!ctx->status.timed_out) {
@@ -2726,48 +2610,32 @@ nvme_ctrlr_identify_active_ns(struct spdk_nvme_ctrlr *ctrlr)
 	return rc;
 }
 
-static struct spdk_nvme_ns *
-nvme_ctrlr_find_pending_identify_ns(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *prev)
-{
-	struct spdk_nvme_ns *ns;
-
-	if (prev == NULL) {
-		ns = RB_MIN(nvme_ns_tree, &ctrlr->ns);
-	} else {
-		ns = RB_NEXT(nvme_ns_tree, &ctrlr->ns, prev);
-	}
-
-	while (ns != NULL) {
-		if (ns->identify_pending) {
-			return ns;
-		}
-		ns = RB_NEXT(nvme_ns_tree, &ctrlr->ns, ns);
-	}
-
-	return NULL;
-}
-
 static void
 nvme_ctrlr_identify_ns_async_done(void *arg, const struct spdk_nvme_cpl *cpl)
 {
 	struct spdk_nvme_ns *ns = (struct spdk_nvme_ns *)arg;
 	struct spdk_nvme_ctrlr *ctrlr = ns->ctrlr;
+	uint32_t nsid;
 	int rc;
 
-	if (nvme_ctrlr_handle_identify_ns_completion(ctrlr, ns, cpl)) {
+	if (spdk_nvme_cpl_is_error(cpl)) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
 		return;
 	}
 
 	nvme_ns_set_identify_data(ns);
 
-	/* move on to the next NS pending identify */
-	ns = nvme_ctrlr_find_pending_identify_ns(ctrlr, ns);
+	/* move on to the next active NS */
+	nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, ns->id);
+	ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
 	if (ns == NULL) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_ID_DESCS,
 				     ctrlr->opts.admin_timeout_ms);
 		return;
 	}
+	ns->ctrlr = ctrlr;
+	ns->id = nsid;
+
 	rc = nvme_ctrlr_identify_ns_async(ns);
 	if (rc) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
@@ -2792,16 +2660,21 @@ nvme_ctrlr_identify_ns_async(struct spdk_nvme_ns *ns)
 static int
 nvme_ctrlr_identify_namespaces(struct spdk_nvme_ctrlr *ctrlr)
 {
+	uint32_t nsid;
 	struct spdk_nvme_ns *ns;
 	int rc;
 
-	ns = nvme_ctrlr_find_pending_identify_ns(ctrlr, NULL);
+	nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr);
+	ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
 	if (ns == NULL) {
-		/* No NS pending identify, move on to the next state */
+		/* No active NS, move on to the next state */
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_ID_DESCS,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
+
+	ns->ctrlr = ctrlr;
+	ns->id = nsid;
 
 	rc = nvme_ctrlr_identify_ns_async(ns);
 	if (rc) {
@@ -2859,7 +2732,7 @@ nvme_ctrlr_identify_ns_zns_specific_async_done(void *arg, const struct spdk_nvme
 	struct spdk_nvme_ns *ns = (struct spdk_nvme_ns *)arg;
 	struct spdk_nvme_ctrlr *ctrlr = ns->ctrlr;
 
-	if (nvme_ctrlr_handle_identify_ns_completion(ctrlr, ns, cpl)) {
+	if (spdk_nvme_cpl_is_error(cpl)) {
 		nvme_ns_free_zns_specific_data(ns);
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
 		return;
@@ -2899,7 +2772,7 @@ nvme_ctrlr_identify_ns_nvm_specific_async_done(void *arg, const struct spdk_nvme
 	struct spdk_nvme_ns *ns = (struct spdk_nvme_ns *)arg;
 	struct spdk_nvme_ctrlr *ctrlr = ns->ctrlr;
 
-	if (nvme_ctrlr_handle_identify_ns_completion(ctrlr, ns, cpl)) {
+	if (spdk_nvme_cpl_is_error(cpl)) {
 		nvme_ns_free_nvm_specific_data(ns);
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
 		return;
@@ -2933,56 +2806,14 @@ nvme_ctrlr_identify_ns_nvm_specific_async(struct spdk_nvme_ns *ns)
 	return rc;
 }
 
-static void
-nvme_ctrlr_identify_ns_kv_specific_async_done(void *arg, const struct spdk_nvme_cpl *cpl)
-{
-	struct spdk_nvme_ns *ns = (struct spdk_nvme_ns *)arg;
-	struct spdk_nvme_ctrlr *ctrlr = ns->ctrlr;
-
-	if (nvme_ctrlr_handle_identify_ns_completion(ctrlr, ns, cpl)) {
-		nvme_ns_free_kv_specific_data(ns);
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
-		return;
-	}
-
-	nvme_ctrlr_identify_namespaces_iocs_specific_next(ctrlr, ns->id);
-}
-
-static int
-nvme_ctrlr_identify_ns_kv_specific_async(struct spdk_nvme_ns *ns)
-{
-	struct spdk_nvme_ctrlr *ctrlr = ns->ctrlr;
-	int rc;
-
-	assert(!ns->nsdata_kv);
-	ns->nsdata_kv = spdk_zmalloc(sizeof(*ns->nsdata_kv), 64, NULL, SPDK_ENV_NUMA_ID_ANY,
-				     SPDK_MALLOC_SHARE);
-	if (!ns->nsdata_kv) {
-		return -ENOMEM;
-	}
-
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_NS_IOCS_SPECIFIC,
-			     ctrlr->opts.admin_timeout_ms);
-	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_NS_IOCS, 0, ns->id, ns->csi,
-				     ns->nsdata_kv, sizeof(*ns->nsdata_kv),
-				     nvme_ctrlr_identify_ns_kv_specific_async_done, ns);
-	if (rc) {
-		nvme_ns_free_kv_specific_data(ns);
-	}
-
-	return rc;
-}
-
 static int
 nvme_ctrlr_identify_ns_iocs_specific_async(struct spdk_nvme_ns *ns)
 {
 	switch (ns->csi) {
 	case SPDK_NVME_CSI_ZNS:
 		return nvme_ctrlr_identify_ns_zns_specific_async(ns);
-	case SPDK_NVME_CSI_KV:
-		return nvme_ctrlr_identify_ns_kv_specific_async(ns);
 	case SPDK_NVME_CSI_NVM:
-		if (ns->ctrlr->cdata.ctratt.elbas) {
+		if (ns->ctrlr->cdata.ctratt.bits.elbas) {
 			return nvme_ctrlr_identify_ns_nvm_specific_async(ns);
 		}
 	/* fallthrough */
@@ -3019,7 +2850,7 @@ nvme_ctrlr_identify_id_desc_async_done(void *arg, const struct spdk_nvme_cpl *cp
 	uint32_t nsid;
 	int rc;
 
-	if (nvme_ctrlr_handle_identify_ns_completion(ctrlr, ns, cpl)) {
+	if (spdk_nvme_cpl_is_error(cpl)) {
 		/*
 		 * Many controllers claim to be compatible with NVMe 1.3, however,
 		 * they do not implement NS ID Desc List. Therefore, instead of setting
@@ -3246,7 +3077,7 @@ nvme_ctrlr_set_keep_alive_timeout_done(void *arg, const struct spdk_nvme_cpl *cp
 	if (spdk_nvme_ctrlr_is_discovery(ctrlr)) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
 	} else {
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
 				     ctrlr->opts.admin_timeout_ms);
 	}
 }
@@ -3260,7 +3091,7 @@ nvme_ctrlr_set_keep_alive_timeout(struct spdk_nvme_ctrlr *ctrlr)
 		if (spdk_nvme_ctrlr_is_discovery(ctrlr)) {
 			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
 		} else {
-			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC,
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
 					     ctrlr->opts.admin_timeout_ms);
 		}
 		return 0;
@@ -3270,7 +3101,7 @@ nvme_ctrlr_set_keep_alive_timeout(struct spdk_nvme_ctrlr *ctrlr)
 	if (!spdk_nvme_ctrlr_is_discovery(ctrlr) && ctrlr->cdata.kas == 0) {
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Controller KAS is 0 - not enabling Keep Alive\n");
 		ctrlr->opts.keep_alive_timeout_ms = 0;
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
@@ -3327,7 +3158,7 @@ nvme_ctrlr_set_host_id(struct spdk_nvme_ctrlr *ctrlr)
 		return 0;
 	}
 
-	if (ctrlr->cdata.ctratt.hids) {
+	if (ctrlr->cdata.ctratt.bits.host_id_exhid_supported) {
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Using 128-bit extended host identifier\n");
 		host_id = ctrlr->opts.extended_host_id;
 		host_id_size = sizeof(ctrlr->opts.extended_host_id);
@@ -3360,36 +3191,70 @@ nvme_ctrlr_set_host_id(struct spdk_nvme_ctrlr *ctrlr)
 }
 
 static void
-nvme_ctrlr_process_async_event_finish(struct spdk_nvme_ctrlr_aer_completion *async_event,
-				      bool ns_attr_changed, uint32_t ns_count)
+nvme_ctrlr_process_async_event_finish(struct spdk_nvme_ctrlr_aer_completion *async_event)
 {
 	struct spdk_nvme_ctrlr_process	*active_proc;
 
 	active_proc = nvme_ctrlr_get_current_process(async_event->ctrlr);
-	if (active_proc) {
-		if (ns_attr_changed && active_proc->ns_attr_changed_cb_fn) {
-			active_proc->ns_attr_changed_cb_fn(active_proc->ns_attr_changed_cb_arg,
-							   async_event->log_page.changed_ns_list,
-							   ns_count);
-		} else if (active_proc->aer_cb_fn) {
-			active_proc->aer_cb_fn(active_proc->aer_cb_arg, &async_event->cpl);
-		}
+	if (active_proc && active_proc->aer_cb_fn) {
+		active_proc->aer_cb_fn(active_proc->aer_cb_arg, &async_event->cpl);
 	}
 
-	free(async_event->log_page.changed_ns_list);
 	spdk_free(async_event);
 }
 
-static uint32_t *
-nvme_ctrlr_clear_changed_ns_log(struct spdk_nvme_ctrlr *ctrlr)
+static void
+nvme_ctrlr_update_namespaces(struct spdk_nvme_ctrlr_aer_completion *async_event)
 {
+	struct spdk_nvme_ctrlr *ctrlr = async_event->ctrlr;
+	uint32_t nsid, i;
+	struct spdk_nvme_ns *ns;
+
+	/* Log page is not used, go over all active namespaces.
+	 * Either the log page overflowed or disable_read_changed_ns_list_log_page is used. */
+	if (async_event->log_page.changed_ns_list == NULL) {
+		for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr);
+		     nsid != 0; nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, nsid)) {
+			ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+			nvme_ns_construct(ns, nsid, ctrlr);
+		}
+
+		return;
+	}
+
+	/* Iterate over NSID from the log page. */
+	for (i = 0; i < SPDK_NVME_MAX_CHANGED_NAMESPACES; i++) {
+		nsid = async_event->log_page.changed_ns_list[i];
+
+		/* End of the list */
+		if (nsid == 0) {
+			break;
+		}
+
+		/* Log page contains NSID for namespaces that were marked
+		 * as inactive, no need to identify them. */
+		if (!spdk_nvme_ctrlr_is_active_ns(ctrlr, nsid)) {
+			continue;
+		}
+
+		ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+		nvme_ns_construct(ns, nsid, ctrlr);
+	}
+
+	free(async_event->log_page.changed_ns_list);
+}
+
+static int
+nvme_ctrlr_clear_changed_ns_log(struct spdk_nvme_ctrlr_aer_completion *async_event)
+{
+	struct spdk_nvme_ctrlr			*ctrlr = async_event->ctrlr;
 	struct nvme_completion_poll_status	*status;
-	int		rc;
+	int		rc = -ENOMEM;
 	uint32_t	*changed_ns_list;
 	size_t		changed_ns_list_length = SPDK_NVME_MAX_CHANGED_NAMESPACES * sizeof(uint32_t);
 
 	if (ctrlr->opts.disable_read_changed_ns_list_log_page) {
-		return NULL;
+		return 0;
 	}
 
 	changed_ns_list = calloc(1, changed_ns_list_length);
@@ -3422,20 +3287,18 @@ nvme_ctrlr_clear_changed_ns_log(struct spdk_nvme_ctrlr *ctrlr)
 		goto out;
 	}
 
+	/* only check the case of overflow. */
 	if (changed_ns_list[0] == UINT32_MAX) {
 		NVME_CTRLR_WARNLOG(ctrlr, "changed ns log overflowed.\n");
 		goto out;
 	}
 
-	if (changed_ns_list[0] == 0) {
-		NVME_CTRLR_WARNLOG(ctrlr, "changed ns log is empty despite NS_ATTR_CHANGED AER.\n");
-	}
-
-	return changed_ns_list;
+	async_event->log_page.changed_ns_list = changed_ns_list;
+	return 0;
 
 out:
 	free(changed_ns_list);
-	return NULL;
+	return rc;
 }
 
 static void
@@ -3444,77 +3307,35 @@ nvme_ctrlr_process_async_event(struct spdk_nvme_ctrlr_aer_completion *async_even
 	struct spdk_nvme_ctrlr *ctrlr = async_event->ctrlr;
 	struct spdk_nvme_cpl *cpl = &async_event->cpl;
 	union spdk_nvme_async_event_completion event;
-	struct spdk_nvme_ns *ns;
-	bool ns_attr_changed = false;
-	uint32_t ns_count = 0;
-	uint32_t nsid;
 	int rc;
 
 	event.raw = cpl->cdw0;
 
-	if (event.bits.async_event_type != SPDK_NVME_ASYNC_EVENT_TYPE_NOTICE) {
-		goto out;
-	}
+	if ((event.bits.async_event_type == SPDK_NVME_ASYNC_EVENT_TYPE_NOTICE) &&
+	    (event.bits.async_event_info == SPDK_NVME_ASYNC_EVENT_NS_ATTR_CHANGED)) {
+		nvme_ctrlr_clear_changed_ns_log(async_event);
 
-	switch (event.bits.async_event_info) {
-	case SPDK_NVME_ASYNC_EVENT_NS_ATTR_CHANGED:
-		async_event->log_page.changed_ns_list = nvme_ctrlr_clear_changed_ns_log(ctrlr);
-		if (!async_event->log_page.changed_ns_list) {
-			/* Log page is not used, go over all namespaces pending identification. */
-			rc = nvme_ctrlr_identify_active_ns(ctrlr);
-			if (rc) {
-				spdk_free(async_event);
-				return;
-			}
-
-			RB_FOREACH(ns, nvme_ns_tree, &ctrlr->ns) {
-				if (ns->identify_pending) {
-					nvme_ns_identify(ns);
-				}
-			}
-		} else {
-			/* Log page is used, go over changed namespace list only. */
-			for (ns_count = 0; ns_count < SPDK_NVME_MAX_CHANGED_NAMESPACES; ns_count++) {
-				nsid = async_event->log_page.changed_ns_list[ns_count];
-				if (nsid == 0) {
-					break;
-				}
-
-				ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
-				if (!ns) {
-					assert(false);
-					NVME_CTRLR_ERRLOG(ctrlr, "Failed to get namespace %u from changed NS list "
-							  "(NSID out of range or OOM)\n", nsid);
-					continue;
-				}
-
-				nvme_ns_identify(ns);
-			}
-		}
-
-		nvme_io_msg_ctrlr_update(ctrlr);
-		ns_attr_changed = true;
-		break;
-	case SPDK_NVME_ASYNC_EVENT_ANA_CHANGE:
-		if (ctrlr->opts.disable_read_ana_log_page) {
-			break;
-		}
-
-		rc = nvme_ctrlr_update_ana_log_page(ctrlr);
+		rc = nvme_ctrlr_identify_active_ns(ctrlr);
 		if (rc) {
-			spdk_free(async_event);
 			return;
 		}
-
-		nvme_ctrlr_parse_ana_log_page(ctrlr, nvme_ctrlr_update_ns_ana_states,
-					      ctrlr);
-		break;
-	default:
-		break;
+		nvme_ctrlr_update_namespaces(async_event);
+		nvme_io_msg_ctrlr_update(ctrlr);
 	}
 
-out:
-	nvme_ctrlr_process_async_event_finish(async_event, ns_attr_changed, ns_count);
+	if ((event.bits.async_event_type == SPDK_NVME_ASYNC_EVENT_TYPE_NOTICE) &&
+	    (event.bits.async_event_info == SPDK_NVME_ASYNC_EVENT_ANA_CHANGE)) {
+		if (!ctrlr->opts.disable_read_ana_log_page) {
+			rc = nvme_ctrlr_update_ana_log_page(ctrlr);
+			if (rc) {
+				return;
+			}
+			nvme_ctrlr_parse_ana_log_page(ctrlr, nvme_ctrlr_update_ns_ana_states,
+						      ctrlr);
+		}
+	}
+
+	nvme_ctrlr_process_async_event_finish(async_event);
 }
 
 static void
@@ -3677,7 +3498,7 @@ nvme_ctrlr_configure_aer(struct spdk_nvme_ctrlr *ctrlr)
 				config.bits.ana_change_notice = 1;
 			}
 		}
-		if (ctrlr->vs.raw >= SPDK_NVME_VERSION(1, 3, 0) && ctrlr->cdata.lpa.ts) {
+		if (ctrlr->vs.raw >= SPDK_NVME_VERSION(1, 3, 0) && ctrlr->cdata.lpa.telemetry) {
 			config.bits.telemetry_log_notice = 1;
 		}
 	}
@@ -4355,20 +4176,12 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		rc = nvme_ctrlr_set_keep_alive_timeout(ctrlr);
 		break;
 
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC:
-		rc = nvme_ctrlr_identify_iocs_nvm_specific(ctrlr);
-		break;
-
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_ZNS_SPECIFIC:
-		rc = nvme_ctrlr_identify_iocs_zns_specific(ctrlr);
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC:
+		rc = nvme_ctrlr_identify_iocs_specific(ctrlr);
 		break;
 
 	case NVME_CTRLR_STATE_GET_ZNS_CMD_EFFECTS_LOG:
 		rc = nvme_ctrlr_get_zns_cmd_and_effects_log(ctrlr);
-		break;
-
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_KV_SPECIFIC:
-		rc = nvme_ctrlr_identify_iocs_kv_specific(ctrlr);
 		break;
 
 	case NVME_CTRLR_STATE_SET_NUM_QUEUES:
@@ -4447,10 +4260,8 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY:
 	case NVME_CTRLR_STATE_WAIT_FOR_CONFIGURE_AER:
 	case NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT:
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_NVM_SPECIFIC:
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_ZNS_SPECIFIC:
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC:
 	case NVME_CTRLR_STATE_WAIT_FOR_GET_ZNS_CMD_EFFECTS_LOG:
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_KV_SPECIFIC:
 	case NVME_CTRLR_STATE_WAIT_FOR_SET_NUM_QUEUES:
 	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_ACTIVE_NS:
 	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_NS:
@@ -4670,10 +4481,12 @@ nvme_ctrlr_destruct_poll_async(struct spdk_nvme_ctrlr *ctrlr,
 	nvme_transport_ctrlr_disconnect_qpair(ctrlr, ctrlr->adminq);
 
 	RB_FOREACH_SAFE(ns, nvme_ns_tree, &ctrlr->ns, tmp_ns) {
-		nvme_ns_clear(ns);
+		nvme_ctrlr_destruct_namespace(ctrlr, ns->id);
 		RB_REMOVE(nvme_ns_tree, &ctrlr->ns, ns);
 		spdk_free(ns);
 	}
+
+	ctrlr->active_ns_count = 0;
 
 	spdk_bit_array_free(&ctrlr->free_io_qids);
 
@@ -4815,12 +4628,6 @@ const struct spdk_nvme_ctrlr_data *
 spdk_nvme_ctrlr_get_data(struct spdk_nvme_ctrlr *ctrlr)
 {
 	return &ctrlr->cdata;
-}
-
-const struct spdk_nvme_nvm_ctrlr_data *
-spdk_nvme_nvm_ctrlr_get_data(struct spdk_nvme_ctrlr *ctrlr)
-{
-	return ctrlr->cdata_nvm;
 }
 
 union spdk_nvme_csts_register spdk_nvme_ctrlr_get_regs_csts(struct spdk_nvme_ctrlr *ctrlr)
@@ -4982,7 +4789,6 @@ spdk_nvme_ctrlr_get_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Namespace %u was added\n", nsid);
 		ns->id = nsid;
 		ns->ctrlr = ctrlr;
-		ns->ana_state = SPDK_NVME_ANA_OPTIMIZED_STATE;
 		RB_INSERT(nvme_ns_tree, &ctrlr->ns, ns);
 	}
 
@@ -5056,24 +4862,6 @@ spdk_nvme_ctrlr_register_aer_callback(struct spdk_nvme_ctrlr *ctrlr,
 }
 
 void
-spdk_nvme_ctrlr_register_ns_attr_changed_callback(struct spdk_nvme_ctrlr *ctrlr,
-		spdk_nvme_ns_attr_changed_cb cb_fn,
-		void *cb_arg)
-{
-	struct spdk_nvme_ctrlr_process *active_proc;
-
-	nvme_ctrlr_lock(ctrlr);
-
-	active_proc = nvme_ctrlr_get_current_process(ctrlr);
-	if (active_proc) {
-		active_proc->ns_attr_changed_cb_fn = cb_fn;
-		active_proc->ns_attr_changed_cb_arg = cb_arg;
-	}
-
-	nvme_ctrlr_unlock(ctrlr);
-}
-
-void
 spdk_nvme_ctrlr_disable_read_changed_ns_list_log_page(struct spdk_nvme_ctrlr *ctrlr)
 {
 	ctrlr->opts.disable_read_changed_ns_list_log_page = true;
@@ -5090,18 +4878,6 @@ spdk_nvme_ctrlr_register_timeout_callback(struct spdk_nvme_ctrlr *ctrlr,
 
 	active_proc = nvme_ctrlr_get_current_process(ctrlr);
 	if (active_proc) {
-		if (ctrlr->opts.keep_alive_timeout_ms * SPDK_MSEC_TO_USEC > timeout_io_us) {
-			NVME_CTRLR_WARNLOG(ctrlr,
-					   "opts.keep_alive_timeout_ms %u should be less than timeout_io_us %lu\n",
-					   ctrlr->opts.keep_alive_timeout_ms, timeout_io_us);
-		}
-
-		if (ctrlr->opts.keep_alive_timeout_ms * SPDK_MSEC_TO_USEC > timeout_admin_us) {
-			NVME_CTRLR_WARNLOG(ctrlr,
-					   "opts.keep_alive_timeout_ms %u should be less than timeout_admin_us %lu\n",
-					   ctrlr->opts.keep_alive_timeout_ms, timeout_admin_us);
-		}
-
 		active_proc->timeout_io_ticks = timeout_io_us * spdk_get_ticks_hz() / 1000000ULL;
 		active_proc->timeout_admin_ticks = timeout_admin_us * spdk_get_ticks_hz() / 1000000ULL;
 		active_proc->timeout_cb_fn = cb_fn;
@@ -5172,7 +4948,7 @@ spdk_nvme_ctrlr_attach_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		return -ENXIO;
 	}
 
-	return nvme_ns_identify(ns);
+	return nvme_ns_construct(ns, nsid, ctrlr);
 }
 
 int

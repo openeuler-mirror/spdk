@@ -5,13 +5,9 @@
 
 #include "spdk/stdinc.h"
 
-#include "spdk/config.h"
 #include "spdk/event.h"
 
 #include "spdk/vhost.h"
-#if defined(SPDK_CONFIG_VFIO_USER)
-#include "spdk/vfu_target.h"
-#endif
 
 static const char *g_pid_path = NULL;
 
@@ -19,7 +15,7 @@ static void
 vhost_usage(void)
 {
 	printf(" -f <path>                 save pid to file under given path\n");
-	printf(" -S <path>                 directory where to create vhost/vfio-user sockets (default: pwd)\n");
+	printf(" -S <path>                 directory where to create vhost sockets (default: pwd)\n");
 }
 
 static void
@@ -46,9 +42,6 @@ vhost_parse_arg(int ch, char *arg)
 		break;
 	case 'S':
 		spdk_vhost_set_socket_path(arg);
-#if defined(SPDK_CONFIG_VFIO_USER)
-		spdk_vfu_set_socket_path(arg);
-#endif
 		break;
 	default:
 		return -EINVAL;

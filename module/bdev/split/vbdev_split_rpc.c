@@ -10,12 +10,16 @@
 #include "vbdev_split.h"
 #include "spdk/log.h"
 
-#include "spdk_internal/rpc_autogen.h"
+struct rpc_construct_split {
+	char *base_bdev;
+	uint32_t split_count;
+	uint64_t split_size_mb;
+};
 
-static const struct spdk_json_object_decoder rpc_bdev_split_create_decoders[] = {
-	{"base_bdev", offsetof(struct rpc_bdev_split_create_ctx, base_bdev), spdk_json_decode_string},
-	{"split_count", offsetof(struct rpc_bdev_split_create_ctx, split_count), spdk_json_decode_uint32},
-	{"split_size_mb", offsetof(struct rpc_bdev_split_create_ctx, split_size_mb), spdk_json_decode_uint64, true},
+static const struct spdk_json_object_decoder rpc_construct_split_decoders[] = {
+	{"base_bdev", offsetof(struct rpc_construct_split, base_bdev), spdk_json_decode_string},
+	{"split_count", offsetof(struct rpc_construct_split, split_count), spdk_json_decode_uint32},
+	{"split_size_mb", offsetof(struct rpc_construct_split, split_size_mb), spdk_json_decode_uint64, true},
 };
 
 static void
@@ -27,14 +31,14 @@ static void
 rpc_bdev_split_create(struct spdk_jsonrpc_request *request,
 		      const struct spdk_json_val *params)
 {
-	struct rpc_bdev_split_create_ctx req = {};
+	struct rpc_construct_split req = {};
 	struct spdk_json_write_ctx *w;
 	struct spdk_bdev_desc *base_desc;
 	struct spdk_bdev *base_bdev;
 	int rc;
 
-	if (spdk_json_decode_object(params, rpc_bdev_split_create_decoders,
-				    SPDK_COUNTOF(rpc_bdev_split_create_decoders),
+	if (spdk_json_decode_object(params, rpc_construct_split_decoders,
+				    SPDK_COUNTOF(rpc_construct_split_decoders),
 				    &req)) {
 		SPDK_ERRLOG("spdk_json_decode_object failed\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid parameters");
@@ -78,23 +82,27 @@ rpc_bdev_split_create(struct spdk_jsonrpc_request *request,
 	spdk_jsonrpc_end_result(request, w);
 
 out:
-	free_rpc_bdev_split_create(&req);
+	free(req.base_bdev);
 }
 SPDK_RPC_REGISTER("bdev_split_create", rpc_bdev_split_create, SPDK_RPC_RUNTIME)
 
-static const struct spdk_json_object_decoder rpc_bdev_split_delete_decoders[] = {
-	{"base_bdev", offsetof(struct rpc_bdev_split_delete_ctx, base_bdev), spdk_json_decode_string},
+struct rpc_delete_split {
+	char *base_bdev;
+};
+
+static const struct spdk_json_object_decoder rpc_delete_split_decoders[] = {
+	{"base_bdev", offsetof(struct rpc_delete_split, base_bdev), spdk_json_decode_string},
 };
 
 static void
 rpc_bdev_split_delete(struct spdk_jsonrpc_request *request,
 		      const struct spdk_json_val *params)
 {
-	struct rpc_bdev_split_delete_ctx req = {};
+	struct rpc_delete_split req = {};
 	int rc;
 
-	if (spdk_json_decode_object(params, rpc_bdev_split_delete_decoders,
-				    SPDK_COUNTOF(rpc_bdev_split_delete_decoders),
+	if (spdk_json_decode_object(params, rpc_delete_split_decoders,
+				    SPDK_COUNTOF(rpc_delete_split_decoders),
 				    &req)) {
 		SPDK_ERRLOG("spdk_json_decode_object failed\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid parameters");
@@ -109,6 +117,6 @@ rpc_bdev_split_delete(struct spdk_jsonrpc_request *request,
 
 	spdk_jsonrpc_send_bool_response(request, true);
 out:
-	free_rpc_bdev_split_delete(&req);
+	free(req.base_bdev);
 }
 SPDK_RPC_REGISTER("bdev_split_delete", rpc_bdev_split_delete, SPDK_RPC_RUNTIME)

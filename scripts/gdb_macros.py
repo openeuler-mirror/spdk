@@ -325,7 +325,7 @@ class SpdkSpinlockStackPrinter(object):
             try:
                 line += ' ' + str(sal.symtab.filename)
                 line += ':' + str(sal.line)
-            except AttributeError:
+            except AttributeError as e:
                 pass
             ret.append(line)
         return ret

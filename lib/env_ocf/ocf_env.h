@@ -1,6 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
- *   Copyright (C) 2026 Unvertical.
  *   All rights reserved.
  */
 
@@ -374,11 +373,11 @@ typedef int env_atomic;
 typedef long env_atomic64;
 
 #ifndef atomic_read
-#define atomic_read(ptr)       (*(volatile __typeof__(*ptr) *) (ptr))
+#define atomic_read(ptr)       (*(__typeof__(*ptr) *volatile) (ptr))
 #endif
 
 #ifndef atomic_set
-#define atomic_set(ptr, i)     ((*(volatile __typeof__(*ptr) *) (ptr)) = (i))
+#define atomic_set(ptr, i)     ((*(__typeof__(*ptr) *volatile) (ptr)) = (i))
 #endif
 
 #define atomic_inc(ptr)        ((void) __sync_fetch_and_add(ptr, 1))

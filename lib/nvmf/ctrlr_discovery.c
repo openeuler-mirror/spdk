@@ -69,30 +69,24 @@ nvmf_discovery_compare_trid(uint32_t filter,
 			    const struct spdk_nvme_transport_id *trid1,
 			    const struct spdk_nvme_transport_id *trid2)
 {
-	if ((filter & SPDK_BIT(SPDK_NVMF_TGT_DISCOVERY_FILTER_TYPE)) != 0 &&
+	if ((filter & SPDK_NVMF_TGT_DISCOVERY_MATCH_TRANSPORT_TYPE) != 0 &&
 	    !nvmf_discovery_compare_trtype(trid1, trid2)) {
 		SPDK_DEBUGLOG(nvmf, "transport type mismatch between %d (%s) and %d (%s)\n",
 			      trid1->trtype, trid1->trstring, trid2->trtype, trid2->trstring);
 		return false;
 	}
 
-	if ((filter & SPDK_BIT(SPDK_NVMF_TGT_DISCOVERY_FILTER_ADDRESS)) != 0 &&
+	if ((filter & SPDK_NVMF_TGT_DISCOVERY_MATCH_TRANSPORT_ADDRESS) != 0 &&
 	    !nvmf_discovery_compare_tr_addr(trid1, trid2)) {
 		SPDK_DEBUGLOG(nvmf, "transport addr mismatch between %s and %s\n",
 			      trid1->traddr, trid2->traddr);
 		return false;
 	}
 
-	if ((filter & SPDK_BIT(SPDK_NVMF_TGT_DISCOVERY_FILTER_SVCID)) != 0 &&
+	if ((filter & SPDK_NVMF_TGT_DISCOVERY_MATCH_TRANSPORT_SVCID) != 0 &&
 	    !nvmf_discovery_compare_tr_svcid(trid1, trid2)) {
 		SPDK_DEBUGLOG(nvmf, "transport svcid mismatch between %s and %s\n",
 			      trid1->trsvcid, trid2->trsvcid);
-		return false;
-	}
-
-	if ((filter & SPDK_BIT(SPDK_NVMF_TGT_DISCOVERY_FILTER_CUSTOM)) != 0 &&
-	    g_custom_discovery_filter(trid1, trid2)) {
-		SPDK_DEBUGLOG(nvmf, "custom discovery filter mismatch\n");
 		return false;
 	}
 
@@ -103,8 +97,6 @@ static struct spdk_nvmf_discovery_log_page *
 nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size_t *log_page_size,
 			    struct spdk_nvme_transport_id *cmd_source_trid)
 {
-	assert(spdk_thread_is_app_thread(NULL));
-
 	uint64_t numrec = 0;
 	struct spdk_nvmf_subsystem *subsystem;
 	struct spdk_nvmf_subsystem_listener *listener;
@@ -123,7 +115,9 @@ nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size
 		return NULL;
 	}
 
-	NVMF_SUBSYSTEM_FOREACH(tgt, subsystem) {
+	for (subsystem = spdk_nvmf_subsystem_get_first(tgt);
+	     subsystem != NULL;
+	     subsystem = spdk_nvmf_subsystem_get_next(subsystem)) {
 		if ((subsystem->state == SPDK_NVMF_SUBSYSTEM_INACTIVE) ||
 		    (subsystem->state == SPDK_NVMF_SUBSYSTEM_DEACTIVATING)) {
 			continue;
@@ -133,10 +127,8 @@ nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size
 			continue;
 		}
 
-		TAILQ_FOREACH(listener, &subsystem->listeners, link) {
-			if (!nvmf_subsystem_listener_is_active(listener)) {
-				continue;
-			}
+		for (listener = spdk_nvmf_subsystem_get_first_listener(subsystem); listener != NULL;
+		     listener = spdk_nvmf_subsystem_get_next_listener(subsystem, listener)) {
 
 			if (!nvmf_discovery_compare_trid(tgt->discovery_filter, listener->trid, cmd_source_trid)) {
 				continue;
@@ -161,10 +153,10 @@ nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size
 			entry->portid = listener->id;
 			entry->cntlid = 0xffff;
 			entry->asqsz = listener->transport->opts.max_aq_depth;
-			entry->subtype = subsystem->opts.type;
+			entry->subtype = subsystem->subtype;
 			snprintf(entry->subnqn, sizeof(entry->subnqn), "%s", subsystem->subnqn);
 
-			if (subsystem->opts.type == SPDK_NVMF_SUBTYPE_DISCOVERY_CURRENT) {
+			if (subsystem->subtype == SPDK_NVMF_SUBTYPE_DISCOVERY_CURRENT) {
 				/* Each listener in the Current Discovery Subsystem provides access
 				 * to the same Discovery Log Pages, so set the Duplicate Returned
 				 * Information flag. */
@@ -184,10 +176,6 @@ nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size
 	TAILQ_FOREACH(referral, &tgt->referrals, link) {
 		SPDK_DEBUGLOG(nvmf, "referral %s:%s trtype %s\n", referral->trid.traddr, referral->trid.trsvcid,
 			      referral->trid.trstring);
-
-		if (!spdk_nvmf_referral_host_allowed(referral, hostnqn)) {
-			continue;
-		}
 
 		size_t new_size = cur_size + sizeof(*entry);
 		void *new_log_page = realloc(disc_log, new_size);
@@ -214,47 +202,29 @@ nvmf_generate_discovery_log(struct spdk_nvmf_tgt *tgt, const char *hostnqn, size
 	return disc_log;
 }
 
-/* Async discovery log page generation context */
-struct nvmf_discovery_log_ctx {
-	struct spdk_nvmf_request *req;
-	struct spdk_nvmf_tgt *tgt;
-	char *hostnqn;
-	uint64_t offset;
-	uint32_t length;
-	struct spdk_nvme_transport_id cmd_source_trid;
-	bool rae;
-};
-
-static void
-nvmf_get_discovery_log_page(void *arg)
+int
+nvmf_get_discovery_log_page(struct spdk_nvmf_tgt *tgt, const char *hostnqn, struct iovec *iov,
+			    uint32_t iovcnt, uint64_t offset, uint32_t length,
+			    struct spdk_nvme_transport_id *cmd_source_trid)
 {
-	struct nvmf_discovery_log_ctx *ctx = arg;
-	struct spdk_nvmf_request *req = ctx->req;
-	struct spdk_nvmf_discovery_log_page *discovery_log_page;
-	size_t log_page_size = 0;
 	size_t copy_len = 0;
 	size_t zero_len = 0;
 	struct iovec *tmp;
-	uint64_t offset = ctx->offset;
-	uint32_t length = ctx->length;
-	int rc = 0;
+	size_t log_page_size = 0;
+	struct spdk_nvmf_discovery_log_page *discovery_log_page;
 
-	assert(spdk_thread_is_app_thread(NULL));
-
-	discovery_log_page = nvmf_generate_discovery_log(ctx->tgt, ctx->hostnqn,
-			     &log_page_size, &ctx->cmd_source_trid);
+	discovery_log_page = nvmf_generate_discovery_log(tgt, hostnqn, &log_page_size, cmd_source_trid);
 
 	if (offset >= log_page_size) {
 		SPDK_ERRLOG("Invalid Get log page discovery offset: (%" PRIu64 "), log page size (%zu)\n",
 			    offset, log_page_size);
-		rc = -EINVAL;
 		free(discovery_log_page);
-		goto complete;
+		return -EINVAL;
 	}
 
 	/* Copy the valid part of the discovery log page, if any */
 	if (discovery_log_page) {
-		for (tmp = req->iov; tmp < req->iov + req->iovcnt; tmp++) {
+		for (tmp = iov; tmp < iov + iovcnt; tmp++) {
 			copy_len = spdk_min(tmp->iov_len, length);
 			copy_len = spdk_min(log_page_size - offset, copy_len);
 
@@ -272,61 +242,12 @@ nvmf_get_discovery_log_page(void *arg)
 			memset((char *)tmp->iov_base + copy_len, 0, zero_len);
 		}
 
-		for (++tmp; tmp < req->iov + req->iovcnt; tmp++) {
+		for (++tmp; tmp < iov + iovcnt; tmp++) {
 			memset((char *)tmp->iov_base, 0, tmp->iov_len);
 		}
 
 		free(discovery_log_page);
 	}
 
-complete:
-	if (rc == 0 && !ctx->rae) {
-		nvmf_ctrlr_unmask_aen(req->qpair->ctrlr, SPDK_NVME_ASYNC_EVENT_DISCOVERY_LOG_CHANGE_MASK_BIT);
-	}
-
-	if (rc != 0) {
-		req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-		req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INVALID_FIELD;
-	}
-
-	free(ctx->hostnqn);
-	free(ctx);
-
-	spdk_nvmf_request_complete(req);
-}
-
-void
-nvmf_get_discovery_log_page_async(struct spdk_nvmf_request *req,
-				  uint64_t offset, uint32_t length,
-				  struct spdk_nvme_transport_id *cmd_source_trid,
-				  bool rae)
-{
-	struct nvmf_discovery_log_ctx *ctx;
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		SPDK_ERRLOG("Failed to allocate discovery log context\n");
-		goto error;
-	}
-
-	ctx->req = req;
-	ctx->tgt = req->qpair->ctrlr->subsys->tgt;
-	ctx->hostnqn = strdup(req->qpair->ctrlr->hostnqn);
-	if (!ctx->hostnqn) {
-		SPDK_ERRLOG("Failed to duplicate hostnqn\n");
-		free(ctx);
-		goto error;
-	}
-	ctx->offset = offset;
-	ctx->length = length;
-	ctx->cmd_source_trid = *cmd_source_trid;
-	ctx->rae = rae;
-
-	spdk_thread_send_msg(spdk_thread_get_app_thread(), nvmf_get_discovery_log_page, ctx);
-	return;
-
-error:
-	req->rsp->nvme_cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-	spdk_nvmf_request_complete(req);
+	return 0;
 }

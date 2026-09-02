@@ -24,7 +24,7 @@ function run_bdevperf() {
 
 	bdevperf_rpc_sock=/var/tmp/bdevperf.sock
 	# use bdevperf to test "bdev_nvme_attach_controller"
-	run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10
+	$rootdir/build/examples/bdevperf -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10 "${NO_HUGE[@]}" &
 	bdevperf_pid=$!
 
 	trap 'cleanup; exit 1' SIGINT SIGTERM EXIT
@@ -101,7 +101,7 @@ if [[ "$ktls" != "false" ]]; then
 fi
 
 # Check KTLS enable
-$rpc_py sock_impl_set_options -i ssl --ktls
+$rpc_py sock_impl_set_options -i ssl --enable-ktls
 ktls=$($rpc_py sock_impl_get_options -i ssl | jq -r .enable_ktls)
 if [[ "$ktls" != "true" ]]; then
 	echo "KTLS was not set correctly $ktls != true"
@@ -109,7 +109,7 @@ if [[ "$ktls" != "true" ]]; then
 fi
 
 # Check KTLS disable
-$rpc_py sock_impl_set_options -i ssl --no-ktls
+$rpc_py sock_impl_set_options -i ssl --disable-ktls
 ktls=$($rpc_py sock_impl_get_options -i ssl | jq -r .enable_ktls)
 if [[ "$ktls" != "false" ]]; then
 	echo "KTLS was not set correctly $ktls != false"
@@ -185,7 +185,7 @@ chmod 0600 $key_long_path
 nvmfappstart -m 0x2
 setup_nvmf_tgt $key_long_path
 
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10
+$rootdir/build/examples/bdevperf -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10 "${NO_HUGE[@]}" &
 bdevperf_pid=$!
 
 trap 'cleanup; exit 1' SIGINT SIGTERM EXIT
@@ -203,7 +203,8 @@ killprocess $nvmfpid
 
 # Launch apps with configs
 nvmfappstart -m 0x2 -c <(echo "$tgtconf")
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10 -c <(echo "$bdevperfconf")
+$rootdir/build/examples/bdevperf -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 10 \
+	-c <(echo "$bdevperfconf") "${NO_HUGE[@]}" &
 
 bdevperf_pid=$!
 waitforlisten $bdevperf_pid $bdevperf_rpc_sock
@@ -218,7 +219,8 @@ killprocess $nvmfpid
 # Load the keys using keyring
 nvmfappstart
 setup_nvmf_tgt "$key_long_path"
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" -q 128 -o 4k -w verify -t 1
+"$rootdir/build/examples/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" \
+	-q 128 -o 4k -w verify -t 1 "${NO_HUGE[@]}" &
 bdevperf_pid=$!
 
 trap 'cleanup; exit 1' SIGINT SIGTERM EXIT
@@ -249,7 +251,8 @@ rpc_cmd << CONFIG
 	nvmf_subsystem_add_host nqn.2016-06.io.spdk:cnode1 nqn.2016-06.io.spdk:host1 --psk key0
 CONFIG
 
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" -q 128 -o 4k -w verify -t 1
+"$rootdir/build/examples/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" \
+	-q 128 -o 4k -w verify -t 1 "${NO_HUGE[@]}" &
 bdevperf_pid=$!
 
 waitforlisten "$bdevperf_pid" "$bdevperf_rpc_sock"
@@ -268,7 +271,8 @@ killprocess $bdevperf_pid
 killprocess $nvmfpid
 
 nvmfappstart -c <(echo "$tgtcfg")
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" -q 128 -o 4k -w verify -t 1 -c <(echo "$bperfcfg")
+"$rootdir/build/examples/bdevperf" -m 2 -z -r "$bdevperf_rpc_sock" \
+	-q 128 -o 4k -w verify -t 1 "${NO_HUGE[@]}" -c <(echo "$bperfcfg") &
 bdevperf_pid=$!
 waitforlisten "$bdevperf_pid" "$bdevperf_rpc_sock"
 

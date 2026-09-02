@@ -13,6 +13,8 @@ MALLOC_BDEV_SIZE=64
 MALLOC_BLOCK_SIZE=512
 
 rpc_py="$rootdir/scripts/rpc.py"
+bpf_sh="$rootdir/scripts/bpftrace.sh"
+
 bdevperf_rpc_sock=/var/tmp/bdevperf.sock
 
 # NQN prefix to use for subsystem NQNs
@@ -39,7 +41,7 @@ $rpc_py nvmf_subsystem_add_ns $NQN Malloc0
 $rpc_py nvmf_subsystem_add_listener $NQN -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
 $rpc_py nvmf_subsystem_add_listener $NQN -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_SECOND_PORT
 
-run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 90 &> "$testdir/try.txt"
+"$rootdir/build/examples/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock -q 128 -o 4096 -w verify -t 90 "${NO_HUGE[@]}" &> "$testdir/try.txt" &
 bdevperf_pid=$!
 
 trap 'cleanup; exit 1' SIGINT SIGTERM EXIT
@@ -58,16 +60,17 @@ function set_ANA_state() {
 	$rpc_py nvmf_subsystem_listener_set_ana_state $NQN -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_SECOND_PORT -n $2
 }
 
-function check_status() {
-	local io_paths
-	io_paths=$($rpc_py -s $bdevperf_rpc_sock bdev_nvme_get_io_paths)
+function port_status() {
+	[[ $($rpc_py -s $bdevperf_rpc_sock bdev_nvme_get_io_paths | jq -r ".poll_groups[].io_paths[] | select (.transport.trsvcid==\"$1\").$2") == "$3" ]]
+}
 
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_PORT\").current" <<< "$io_paths") == "$1" ]]
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_SECOND_PORT\").current" <<< "$io_paths") == "$2" ]]
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_PORT\").connected" <<< "$io_paths") == "$3" ]]
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_SECOND_PORT\").connected" <<< "$io_paths") == "$4" ]]
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_PORT\").accessible" <<< "$io_paths") == "$5" ]]
-	[[ $(jq -r ".poll_groups[].io_paths[] | select(.transport.trsvcid==\"$NVMF_SECOND_PORT\").accessible" <<< "$io_paths") == "$6" ]]
+function check_status() {
+	port_status $NVMF_PORT current $1
+	port_status $NVMF_SECOND_PORT current $2
+	port_status $NVMF_PORT connected $3
+	port_status $NVMF_SECOND_PORT connected $4
+	port_status $NVMF_PORT accessible $5
+	port_status $NVMF_SECOND_PORT accessible $6
 }
 
 "$rootdir/examples/bdev/bdevperf/bdevperf.py" -t 120 -s $bdevperf_rpc_sock perform_tests &
@@ -134,103 +137,6 @@ check_status true false true true true false
 killprocess $bdevperf_pid
 # Make sure we catch bdevperf's exit status
 wait $bdevperf_pid
-
-cat "$testdir/try.txt"
-
-#
-# Multipath configuration tests
-#
-
-function check_config() {
-	local name=$1
-	local expected_attach_count=$2
-	local expected_policy=${3:-}
-	local expected_selector=${4:-}
-	local expected_min_io=${5:-}
-	local attach_cfg attach_count mp_opts policy selector min_io
-
-	attach_cfg=$($rpc_py -s $bdevperf_rpc_sock framework_get_config bdev \
-		| jq --arg n "$name" \
-			'[.[] | select(.method == "bdev_nvme_attach_controller"
-			and .params.name == $n)]')
-
-	attach_count=$(jq 'length' <<< "$attach_cfg")
-	((attach_count == expected_attach_count))
-
-	mp_opts=$(jq '.[0].params.multipath_opts // {}' <<< "$attach_cfg")
-
-	policy=$(jq -r '.policy // "<missing>"' <<< "$mp_opts")
-	selector=$(jq -r '.selector // "<missing>"' <<< "$mp_opts")
-	min_io=$(jq -r '.min_io // 0' <<< "$mp_opts")
-
-	if [[ -n "$expected_policy" ]]; then
-		[[ "$policy" == "$expected_policy" ]]
-	fi
-	if [[ -n "$expected_selector" ]]; then
-		[[ "$selector" == "$expected_selector" ]]
-	fi
-	if [[ -n "$expected_min_io" ]]; then
-		((min_io == expected_min_io))
-	fi
-}
-
-function run_bdevperf() {
-	run_app_bg "$SPDK_EXAMPLE_DIR/bdevperf" -m 0x4 -z -r $bdevperf_rpc_sock \
-		-q 128 -o 4096 -w verify -t 90 &> "$testdir/try.txt"
-	bdevperf_pid=$!
-	waitforlisten $bdevperf_pid $bdevperf_rpc_sock
-}
-
-function stop_bdevperf() {
-	killprocess $bdevperf_pid
-}
-
-function attach_bdev_nvme_ctrlr() {
-	local opts=()
-
-	[[ -n "$2" ]] && opts+=(--policy "$2")
-	[[ -n "$3" ]] && opts+=(--selector "$3")
-	[[ -n "$4" ]] && opts+=(--min-io "$4")
-
-	$rpc_py -s $bdevperf_rpc_sock bdev_nvme_attach_controller \
-		-b Nvme0 -t "$TEST_TRANSPORT" -a "$NVMF_FIRST_TARGET_IP" -s "$1" \
-		-f ipv4 -n "$NQN" -x multipath "${opts[@]}" &> "$testdir/try.txt"
-}
-
-function test_multipath_opts_global() {
-	run_bdevperf
-
-	$rpc_py -s $bdevperf_rpc_sock bdev_nvme_set_options \
-		--policy active_active --selector round_robin --min-io 16
-
-	attach_bdev_nvme_ctrlr "$NVMF_PORT"
-
-	check_config Nvme0 1 active_active round_robin 16
-	stop_bdevperf
-}
-
-function test_multipath_opts_attach() {
-	run_bdevperf
-
-	attach_bdev_nvme_ctrlr "$NVMF_PORT" active_active round_robin 4
-
-	check_config Nvme0 1 active_active round_robin 4
-	stop_bdevperf
-}
-
-function test_multipath_opts_mismatch() {
-	run_bdevperf
-
-	attach_bdev_nvme_ctrlr "$NVMF_PORT" active_active round_robin 4
-	NOT attach_bdev_nvme_ctrlr "$NVMF_SECOND_PORT" active_passive
-
-	check_config Nvme0 1 active_active round_robin 4
-	stop_bdevperf
-}
-
-run_test "nvmf_multipath_opts_global" test_multipath_opts_global
-run_test "nvmf_multipath_opts_attach" test_multipath_opts_attach
-run_test "nvmf_multipath_opts_mismatch" test_multipath_opts_mismatch
 
 cat "$testdir/try.txt"
 

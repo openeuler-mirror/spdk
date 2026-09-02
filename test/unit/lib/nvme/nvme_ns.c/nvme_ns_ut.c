@@ -101,52 +101,54 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 }
 
 static void
-test_nvme_ns_identify(void)
+test_nvme_ns_construct(void)
 {
-	struct spdk_nvme_ctrlr ctrlr = {};
-	struct spdk_nvme_ns ns = { .id = 1, .ctrlr = &ctrlr };
+	struct spdk_nvme_ns ns = {};
+	uint32_t id = 1;
+	struct spdk_nvme_ctrlr ctrlr = { };
 
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	CU_ASSERT(ns.id == 1);
 }
 
 static void
 test_nvme_ns_uuid(void)
 {
+	struct spdk_nvme_ns ns = {};
+	uint32_t id = 1;
 	struct spdk_nvme_ctrlr ctrlr = {};
-	struct spdk_nvme_ns ns = { .id = 1, .ctrlr = &ctrlr };
 	const struct spdk_uuid *uuid;
 	struct spdk_uuid expected_uuid;
 
 	memset(&expected_uuid, 0xA5, sizeof(expected_uuid));
 
 	/* Empty list - no UUID should be found */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	uuid = spdk_nvme_ns_get_uuid(&ns);
 	CU_ASSERT(uuid == NULL);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* NGUID only (no UUID in list) */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x02; /* NIDT == NGUID */
 	ns.id_desc_list[1] = 0x10; /* NIDL */
 	memset(&ns.id_desc_list[4], 0xCC, 0x10);
 	uuid = spdk_nvme_ns_get_uuid(&ns);
 	CU_ASSERT(uuid == NULL);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* Just UUID in the list */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x03; /* NIDT == UUID */
 	ns.id_desc_list[1] = 0x10; /* NIDL */
 	memcpy(&ns.id_desc_list[4], &expected_uuid, sizeof(expected_uuid));
 	uuid = spdk_nvme_ns_get_uuid(&ns);
 	SPDK_CU_ASSERT_FATAL(uuid != NULL);
 	CU_ASSERT(memcmp(uuid, &expected_uuid, sizeof(*uuid)) == 0);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* UUID followed by NGUID */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x03; /* NIDT == UUID */
 	ns.id_desc_list[1] = 0x10; /* NIDL */
 	memcpy(&ns.id_desc_list[4], &expected_uuid, sizeof(expected_uuid));
@@ -156,10 +158,10 @@ test_nvme_ns_uuid(void)
 	uuid = spdk_nvme_ns_get_uuid(&ns);
 	SPDK_CU_ASSERT_FATAL(uuid != NULL);
 	CU_ASSERT(memcmp(uuid, &expected_uuid, sizeof(*uuid)) == 0);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* NGUID followed by UUID */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x02; /* NIDT == NGUID */
 	ns.id_desc_list[1] = 0x10; /* NIDL */
 	memset(&ns.id_desc_list[4], 0xCC, 0x10);
@@ -169,33 +171,34 @@ test_nvme_ns_uuid(void)
 	uuid = spdk_nvme_ns_get_uuid(&ns);
 	SPDK_CU_ASSERT_FATAL(uuid != NULL);
 	CU_ASSERT(memcmp(uuid, &expected_uuid, sizeof(*uuid)) == 0);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 }
 
 static void
 test_nvme_ns_csi(void)
 {
+	struct spdk_nvme_ns ns = {};
+	uint32_t id = 1;
 	struct spdk_nvme_ctrlr ctrlr = {};
-	struct spdk_nvme_ns ns = { .id = 1, .ctrlr = &ctrlr };
 	enum spdk_nvme_csi csi;
 
 	/* Empty list - SPDK_NVME_CSI_NVM should be returned */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	csi = nvme_ns_get_csi(&ns);
 	CU_ASSERT(csi == SPDK_NVME_CSI_NVM);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* NVM CSI - SPDK_NVME_CSI_NVM should be returned */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x4; /* NIDT == CSI */
 	ns.id_desc_list[1] = 0x1; /* NIDL */
 	ns.id_desc_list[4] = 0x0; /* SPDK_NVME_CSI_NVM */
 	csi = nvme_ns_get_csi(&ns);
 	CU_ASSERT(csi == SPDK_NVME_CSI_NVM);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* NGUID followed by ZNS CSI - SPDK_NVME_CSI_ZNS should be returned */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x02; /* NIDT == NGUID */
 	ns.id_desc_list[1] = 0x10; /* NIDL */
 	memset(&ns.id_desc_list[4], 0xCC, 0x10);
@@ -204,10 +207,10 @@ test_nvme_ns_csi(void)
 	ns.id_desc_list[24] = 0x2; /* SPDK_NVME_CSI_ZNS */
 	csi = nvme_ns_get_csi(&ns);
 	CU_ASSERT(csi == SPDK_NVME_CSI_ZNS);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* KV CSI followed by NGUID - SPDK_NVME_CSI_KV should be returned */
-	nvme_ns_identify(&ns);
+	nvme_ns_construct(&ns, id, &ctrlr);
 	ns.id_desc_list[0] = 0x4; /* NIDT == CSI */
 	ns.id_desc_list[1] = 0x1; /* NIDL */
 	ns.id_desc_list[4] = 0x1; /* SPDK_NVME_CSI_KV */
@@ -216,14 +219,14 @@ test_nvme_ns_csi(void)
 	memset(&ns.id_desc_list[9], 0xCC, 0x10);
 	csi = nvme_ns_get_csi(&ns);
 	CU_ASSERT(csi == SPDK_NVME_CSI_KV);
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 }
 
 static void
 test_nvme_ns_data(void)
 {
-	struct spdk_nvme_ctrlr ctrlr = {};
-	struct spdk_nvme_ns ns = { .id = 1, .ctrlr = &ctrlr };
+	struct spdk_nvme_ns ns = {};
+	struct spdk_nvme_ctrlr ctrlr = { };
 	struct spdk_nvme_ns_data expected_nsdata = {
 		.nsze = 1000,
 		.ncap = 1000,
@@ -231,7 +234,7 @@ test_nvme_ns_data(void)
 	const struct spdk_nvme_ns_data *nsdata;
 
 	fake_nsdata = &expected_nsdata;
-	SPDK_CU_ASSERT_FATAL(nvme_ns_identify(&ns) == 0);
+	SPDK_CU_ASSERT_FATAL(nvme_ns_construct(&ns, 1, &ctrlr) == 0);
 	fake_nsdata = NULL;
 	CU_ASSERT(spdk_nvme_ns_is_active(&ns));
 	CU_ASSERT(spdk_nvme_ns_get_id(&ns) == 1);
@@ -241,7 +244,7 @@ test_nvme_ns_data(void)
 	CU_ASSERT(nsdata != NULL);
 	CU_ASSERT(nsdata->ncap == 1000);
 
-	nvme_ns_clear(&ns);
+	nvme_ns_destruct(&ns);
 
 	/* Cached NS data is still accessible after destruction. But is cleared. */
 	CU_ASSERT(!spdk_nvme_ns_is_active(&ns));
@@ -254,18 +257,20 @@ test_nvme_ns_data(void)
 static void
 test_nvme_ns_set_identify_data(void)
 {
+	struct spdk_nvme_ns ns = {};
 	struct spdk_nvme_ctrlr ctrlr = {};
-	struct spdk_nvme_ns ns = { .id = 1, .ctrlr = &ctrlr };
 
-	ns.ctrlr->cdata.oncs.nvmdsmsv = 1;
-	ns.ctrlr->cdata.oncs.nvmcmps = 1;
+	ns.id = 1;
+	ns.ctrlr = &ctrlr;
+
+	ns.ctrlr->cdata.oncs.dsm = 1;
+	ns.ctrlr->cdata.oncs.compare = 1;
 	ns.ctrlr->cdata.vwc.present = 1;
-	ns.ctrlr->cdata.oncs.nvmwzsv = 1;
-	ns.ctrlr->cdata.oncs.nvmwusv = 1;
+	ns.ctrlr->cdata.oncs.write_zeroes = 1;
+	ns.ctrlr->cdata.oncs.write_unc = 1;
 	ns.ctrlr->min_page_size = 4096;
 	ns.ctrlr->max_xfer_size = 131072;
 
-	ns.nsdata.ncap = 1;
 	ns.nsdata.flbas.extended = 1;
 	ns.nsdata.nsrescap.raw = 1;
 	ns.nsdata.dps.pit = SPDK_NVME_FMT_NVM_PROTECTION_TYPE1;
@@ -421,22 +426,22 @@ test_nvme_ns_has_supported_iocs_specific_data(void)
 	struct spdk_nvme_ctrlr ctrlr = {};
 	struct spdk_nvme_ns ns = { .ctrlr = &ctrlr, };
 
-	/* case 1: ns.csi == SPDK_NVME_CSI_NVM && !ctrlr.cdata.ctratt.elbas.
+	/* case 1: ns.csi == SPDK_NVME_CSI_NVM && !ctrlr.cdata.ctratt.bits.elbas.
 	 * Expect: false */
 	ns.csi = SPDK_NVME_CSI_NVM;
-	ctrlr.cdata.ctratt.elbas = false;
+	ctrlr.cdata.ctratt.bits.elbas = false;
 	CU_ASSERT(nvme_ns_has_supported_iocs_specific_data(&ns) == false);
-	/* case 2: ns.csi == SPDK_NVME_CSI_NVM && ctrlr.cdata.ctratt.elbas.
+	/* case 2: ns.csi == SPDK_NVME_CSI_NVM && ctrlr.cdata.ctratt.bits.elbas.
 	 * Expect: true */
-	ctrlr.cdata.ctratt.elbas = true;
+	ctrlr.cdata.ctratt.bits.elbas = true;
 	CU_ASSERT(nvme_ns_has_supported_iocs_specific_data(&ns) == true);
 	/* case 3: ns.csi == SPDK_NVME_CSI_ZNS. Expect: true */
-	ctrlr.cdata.ctratt.elbas = false;
+	ctrlr.cdata.ctratt.bits.elbas = false;
 	ns.csi = SPDK_NVME_CSI_ZNS;
 	CU_ASSERT(nvme_ns_has_supported_iocs_specific_data(&ns) == true);
-	/* case 4: ns.csi == SPDK_NVME_CSI_KV. Expect: true */
+	/* case 4: default ns.csi == SPDK_NVME_CSI_KV. Expect: false */
 	ns.csi = SPDK_NVME_CSI_KV;
-	CU_ASSERT(nvme_ns_has_supported_iocs_specific_data(&ns) == true);
+	CU_ASSERT(nvme_ns_has_supported_iocs_specific_data(&ns) == false);
 }
 
 static void
@@ -463,7 +468,7 @@ test_nvme_ctrlr_identify_ns_iocs_specific(void)
 	CU_ASSERT(ns.nsdata_zns == NULL);
 
 	ns.csi = SPDK_NVME_CSI_NVM;
-	ctrlr.cdata.ctratt.elbas = true;
+	ctrlr.cdata.ctratt.bits.elbas = true;
 
 	/* case 3: Test nvme_ctrlr_identify_ns_iocs_specific. Expect: PASS. */
 	rc = nvme_ctrlr_identify_ns_iocs_specific(&ns);
@@ -549,7 +554,7 @@ main(int argc, char **argv)
 
 	suite = CU_add_suite("nvme", NULL, NULL);
 
-	CU_ADD_TEST(suite, test_nvme_ns_identify);
+	CU_ADD_TEST(suite, test_nvme_ns_construct);
 	CU_ADD_TEST(suite, test_nvme_ns_uuid);
 	CU_ADD_TEST(suite, test_nvme_ns_csi);
 	CU_ADD_TEST(suite, test_nvme_ns_data);

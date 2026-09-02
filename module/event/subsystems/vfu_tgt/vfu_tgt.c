@@ -4,10 +4,9 @@
  */
 
 #include "spdk/stdinc.h"
-#include "spdk/config.h"
 #include "spdk/vfu_target.h"
 
-#include "spdk/init.h"
+#include "spdk_internal/init.h"
 
 static void
 vfu_subsystem_init_done(int rc)
@@ -40,8 +39,3 @@ static struct spdk_subsystem g_spdk_subsystem_vfu_target = {
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_vfu_target);
-SPDK_SUBSYSTEM_DEPEND(vfio_user_target, bdev)
-SPDK_SUBSYSTEM_DEPEND(vfio_user_target, scsi)
-#ifdef SPDK_CONFIG_FSDEV
-SPDK_SUBSYSTEM_DEPEND(vfio_user_target, fsdev)
-#endif

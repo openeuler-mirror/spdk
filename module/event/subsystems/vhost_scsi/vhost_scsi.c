@@ -7,7 +7,7 @@
 
 #include "spdk/vhost.h"
 
-#include "spdk/init.h"
+#include "spdk_internal/init.h"
 
 static void
 vhost_scsi_subsystem_init_done(int rc)

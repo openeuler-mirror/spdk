@@ -19,53 +19,38 @@ The tags can be matched with the level 4 headers below.
 
 ## Deprecation Notices
 
-### bdev
+### python
 
-#### `bdev_get_memory_domains`
+#### `rpc`
 
-`spdk_bdev_get_memory_domains` and the `get_memory_domains` fn_table entry are deprecated.
-Use `spdk_bdev_get_memory_domain_types` and `get_memory_domain_types` instead.
-Will be removed in the v26.09 release.
+Deprecated all modules under python/spdk/rpc providing wrappers around RPC methods.
 
-### bdev/nvme
+Will be removed in the 26.01 release.
 
-The `BDEV_NVME_MP_POLICY_ACTIVE_PASSIVE`, `BDEV_NVME_MP_POLICY_ACTIVE_ACTIVE`,
-`BDEV_NVME_MP_SELECTOR_ROUND_ROBIN`, and `BDEV_NVME_MP_SELECTOR_QUEUE_DEPTH` enum
-value names are deprecated and will be removed in v26.09. Use the
-`SPDK_BDEV_NVME_MULTIPATH_POLICY_*` and `SPDK_BDEV_NVME_MULTIPATH_SELECTOR_*`
-names instead.
+Individual rpc modules provides very simple wrappers around existing client functions.
+There is no translations or useful abstractions happen inside those RPC modules.
+This can be easily replaced by setattr based dynamic functions on the JSONRPCClient.
 
-The `SPDK_NVMF_TGT_DISCOVERY_MATCH_*` enum value names are deprecated and will be removed in v26.09.
-Use the `SPDK_NVMF_TGT_DISCOVERY_FILTER_*` names instead.
+### util/net
 
-#### `bdev_nvme_set_multipath_policy`
+#### `spdk_net_getaddr`
 
-The `spdk_bdev_nvme_set_multipath_policy` function and the `bdev_nvme_set_multipath_policy` RPC
-are deprecated and will be removed in v26.09. Use `spdk_bdev_nvme_create()` with multipath
-options, or the `multipath_opts` parameter in the `bdev_nvme_attach_controller` RPC instead.
+Returning -1 and setting errno on this function is deprecated and will be changed in the 26.01
+release. This function will return negative errno values instead.
 
-### fsdev
+### sock
 
-The current `fsdev` layer and its consumers are deprecated in preparation for
-replacing with a new implementation in the v26.09 release.
+#### `spdk_sock_\*`
 
-#### `fsdev`
+`spdk_sock_getaddr`, `spdk_sock_close`, `spdk_sock_flush`, `spdk_sock_recv`, `spdk_sock_writev`,
+`spdk_sock_readv`, `spdk_sock_recv_next`, `spdk_sock_set_recvlowat`, `spdk_sock_set_recvbuf`,
+`spdk_sock_set_sendbuf`, `spdk_sock_group_add_sock`, `spdk_sock_group_remove_sock`,
+`spdk_sock_group_provide_buf`, `spdk_sock_group_poll`, `spdk_sock_group_poll_count`,
+`spdk_sock_group_close`, `spdk_sock_impl_get_opts`, `spdk_sock_impl_set_opts`,
+`spdk_sock_set_default_impl`, `spdk_sock_group_register_interrupt`
 
-The `fsdev` library, including the public APIs in `include/spdk/fsdev.h` and
-`include/spdk/fsdev_module.h`, the `fsdev` event subsystem, and the `aio` fsdev module
-(the `fsdev_aio_create`/`fsdev_aio_delete` RPCs and the `--with-aio-fsdev` configure
-option) are deprecated and will be replaced in the v26.09 release.
-
-#### `fuse_dispatcher`
-
-The `fuse_dispatcher` library and its public API (`include/spdk/fuse_dispatcher.h`) are
-deprecated and will be removed in the v26.09 release. There will be no replacement;
-the new fsdev implementation will not require a fuse_dispatcher.
-
-#### `vfu_virtio_create_fs_endpoint`
-
-The `virtio-fs` vfu_device support, exposed via the `vfu_virtio_create_fs_endpoint` RPC,
-is deprecated and will be removed in the v26.09 release.
+Returning -1 and setting errno on these functions is deprecated and will be changed in the 26.01
+release. These functions will return negative errno values instead.
 
 ### gpt
 
@@ -81,100 +66,3 @@ See GitHub issue [2801](https://github.com/spdk/spdk/issues/2801) for additional
 
 New SPDK partition types should use GUID `6527994e-2c5a-4eec-9613-8f5944074e8b` which will create
 a bdev of the correct size.
-
-### nvme
-
-#### nvme_spec.h
-
-`spdk_nvme_cdata_ctratt`
-
-Updated bit definitions to NVMe 2.3. Old bit names will be removed in the v26.09 release.
-
-#### `nvme_cpl_without_opc`
-
-`spdk_nvme_cpl_get_status_string`, `spdk_nvme_print_completion`, and
-`spdk_nvme_qpair_print_completion` are deprecated and will be removed in v26.09.
-Use `spdk_nvme_cpl_get_status_string_ext`, `spdk_nvme_print_completion_ext`, and
-`spdk_nvme_qpair_print_completion_ext` instead. The new APIs accept the command opcode
-to correctly distinguish fabric command-specific status codes from NVMe command-specific
-status codes.
-
-### nvmf
-
-`spdk_nvmf_subsystem_create`, `spdk_nvmf_subsystem_set_sn`, `spdk_nvmf_subsystem_set_mn`,
-`spdk_nvmf_subsystem_set_ana_reporting` are deprecated and will be removed in v26.09.
-Use `spdk_nvmf_subsystem_create_ext` with subsystem options instead.
-
-`spdk_nvmf_subsystem_get_sn`, `spdk_nvmf_subsystem_get_mn`, `spdk_nvmf_subsystem_get_max_nsid`,
-`spdk_nvmf_subsystem_get_max_namespaces`, `spdk_nvmf_subsystem_get_ana_reporting`, `spdk_nvmf_subsystem_get_type`
-are deprecated and will be removed in v26.09. Use `spdk_nvmf_subsystem_get_opts` instead.
-
-#### `nvmf_create_subsystem_max_discard_size_kib`
-
-The `max_discard_size_kib` parameter of `nvmf_create_subsystem` RPC is deprecated and will be
-removed in v26.09. Use `dmrsl` instead.
-
-#### `nvmf_create_subsystem_max_write_zeroes_size_kib`
-
-The `max_write_zeroes_size_kib` parameter of `nvmf_create_subsystem` RPC is deprecated and will be
-removed in v26.09. Use `wzsl` instead.
-
-#### `nvmf_namespace_hide_metadata`
-
-The `hide_metadata` parameter of `nvmf_subsystem_add_ns` RPC is deprecated and will be removed in
-v26.09. Metadata visibility on a namespace is determined by the transport's `dif_insert_or_strip`
-option: when any transport on the target has `dif_insert_or_strip` enabled, namespaces are opened
-with metadata hidden so the bdev layer can own DIF generate/verify.
-
-#### `nvmf_tgt_mixed_dif_insert_or_strip`
-
-Adding multiple transports to the same target with disagreeing `dif_insert_or_strip` values is
-deprecated and will be rejected starting in v26.09. All transports on a target must share the
-same `dif_insert_or_strip` setting. Because `dif_insert_or_strip` is applied when a namespace is
-added, a transport that disagrees with an already-attached namespace's setting will also be
-rejected; create the transport (or set the desired value on an existing one) before adding
-namespaces.
-
-#### `nvmf_transport.h`
-
-`struct spdk_nvmf_dif_info`, `struct spdk_nvmf_stripped_data`, `spdk_nvmf_request_get_dif_ctx`,
-and the `dif`, `dif_enabled`, and `stripped_data` fields of `struct spdk_nvmf_request` are
-deprecated and will be removed in v26.09. DIF handling has moved to the bdev layer via the
-namespace's `hide_metadata` open flag, so transports no longer touch DIF context directly. As a
-side effect, the POSIX sock impl without a DIF-capable accelerator now incurs one extra data copy
-per I/O on the DIF path (the old in-place transport-side path is gone).
-
-### sock
-
-#### Zero Copy Receive API Removals
-
-`spdk_sock_group_poll_count`, `spdk_sock_recv_next`, `spdk_sock_group_provide_buf` and
-`spdk_sock_group_get_buf` are deprecated and will be removed in v26.09. A new zero copy
-API will replace them.
-
-#### `spdk_sock_group_add_sock`, `spdk_sock_group_create`
-
-The `cb_fn` and `cb_arg` parameters of `spdk_sock_group_add_sock` are deprecated and will be
-removed in v26.09. Instead, pass `cb_fn` and `cb_arg` via the new `spdk_sock_group_opts` struct
-passed to `spdk_sock_group_create`.
-
-#### `spdk_sock_connect`, `spdk_sock_connect_ext`, `spdk_sock_connect_async`
-
-These 3 APIs will be collapsed into a single replacement starting in v26.09.
-
-#### `spdk_sock_listen`, `spdk_sock_listen_ext`
-
-These two APIs will be collapsed into a single replacement starting in v26.09.
-
-### scripts
-
-The `autorun_post.py` symlink in the repository root is deprecated. The script has been moved to
-`scripts/autorun_post.py`. The symlink will be removed in the v26.09 release.
-
-#### `nvmf_create_transport`
-
-buf-cache-size parameter is deprecated in favor of iobuf-small-cache-size and will be removed in 26.09 release.
-num-shared-buffers parameter is deprecated and will be removed in 26.09 release. Instead the user can use
-`iobuf_set_options` to specify the number of small and large pool entries and use `iobuf-small-cache-size` and
-`iobuf-large-cache-size` parameters of `nvmf_create_transport` RPC to configure desired buffers caches.
-io-unit-size is NOP, it is deprecated and will be removed in v26.09 release.

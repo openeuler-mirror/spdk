@@ -67,7 +67,6 @@ struct fuzz_iscsi_io_ctx {
 };
 
 struct fuzz_iscsi_dev_ctx {
-	struct spdk_sock_group			*group;
 	struct spdk_iscsi_sess			sess;
 	struct spdk_iscsi_conn			*conn;
 	struct fuzz_iscsi_io_ctx		io_ctx;
@@ -666,15 +665,7 @@ iscsi_fuzz_conn_reset(struct spdk_iscsi_conn *conn, struct spdk_iscsi_sess *sess
 }
 
 static void
-iscsi_conn_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
-{
-	struct spdk_iscsi_conn *conn = arg;
-
-	fuzz_iscsi_handle_incoming_pdus(conn);
-}
-
-static void
-iscsi_fuzz_sock_connect(struct spdk_iscsi_conn *conn, struct spdk_sock_group *group)
+iscsi_fuzz_sock_connect(struct spdk_iscsi_conn *conn)
 {
 	const char *host = g_tgt_ip;
 	const char *port = g_tgt_port;
@@ -697,14 +688,8 @@ iscsi_fuzz_sock_connect(struct spdk_iscsi_conn *conn, struct spdk_sock_group *gr
 		return;
 	}
 
-	rc = spdk_sock_group_add_sock(group, conn->sock, iscsi_conn_sock_cb, conn);
-	if (rc < 0) {
-		fprintf(stderr, "Cannot add socket to group\n");
-		spdk_sock_close(&conn->sock);
-		return;
-	}
-
 	fprintf(stderr, "Connection accepted from (%s, %hu) to (%s, %hu)\n", caddr, cport, saddr, sport);
+
 }
 
 static void
@@ -869,7 +854,6 @@ poll_dev(void *ctx)
 	struct spdk_iscsi_conn *conn = dev_ctx->conn;
 	uint64_t current_ticks;
 	struct spdk_iscsi_pdu *pdu, *tmp;
-	int rc;
 
 	current_ticks = spdk_get_ticks();
 	if (current_ticks > g_runtime_ticks) {
@@ -886,8 +870,6 @@ poll_dev(void *ctx)
 			iscsi_put_pdu(pdu);
 		}
 
-		spdk_sock_group_remove_sock(dev_ctx->group, conn->sock);
-
 		spdk_sock_close(&conn->sock);
 
 		TAILQ_FOREACH_SAFE(pdu, &conn->write_pdu_list, tailq, tmp) {
@@ -896,8 +878,6 @@ poll_dev(void *ctx)
 		}
 
 		free(conn);
-
-		spdk_sock_group_close(&dev_ctx->group);
 
 		spdk_poller_unregister(&dev_ctx->poller);
 		__sync_sub_and_fetch(&g_num_active_threads, 1);
@@ -908,7 +888,7 @@ poll_dev(void *ctx)
 	if (conn->is_logged_out) {
 		spdk_sock_close(&conn->sock);
 		iscsi_fuzz_conn_reset(conn, &dev_ctx->sess);
-		iscsi_fuzz_sock_connect(conn, dev_ctx->group);
+		iscsi_fuzz_sock_connect(conn);
 		usleep(1000);
 
 		/* Login PDU */
@@ -917,11 +897,9 @@ poll_dev(void *ctx)
 		dev_submit_requests(dev_ctx);
 	}
 
-	rc = spdk_sock_group_poll(dev_ctx->group);
-	if (rc < 0) {
-		SPDK_ERRLOG("spdk_sock_group_poll() failed, sock_group=%p, rc %d: %s\n", dev_ctx->group, rc,
-			    spdk_strerror(-rc));
-	}
+	spdk_sock_flush(conn->sock);
+
+	fuzz_iscsi_handle_incoming_pdus(conn);
 
 	return 0;
 }
@@ -938,15 +916,12 @@ start_io(void *ctx)
 	dev_ctx->sess.tag = 1;
 	dev_ctx->sess.tsih = 256;
 
-	dev_ctx->group = spdk_sock_group_create(dev_ctx);
-	assert(dev_ctx->group != NULL);
-
 	dev_ctx->conn = calloc(1, sizeof(*dev_ctx->conn));
 	assert(dev_ctx->conn != NULL);
 	TAILQ_INIT(&dev_ctx->conn->write_pdu_list);
 
 	iscsi_fuzz_conn_reset(dev_ctx->conn, &dev_ctx->sess);
-	iscsi_fuzz_sock_connect(dev_ctx->conn, dev_ctx->group);
+	iscsi_fuzz_sock_connect(dev_ctx->conn);
 	usleep(1000);
 
 	/* Login PDU */

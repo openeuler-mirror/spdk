@@ -24,9 +24,10 @@
 #endif
 
 #ifdef SPDK_CONFIG_ISAL
-#include "spdk/isa-l.h"
+#include "../isa-l/include/igzip_lib.h"
 #ifdef SPDK_CONFIG_ISAL_CRYPTO
-#include "spdk/isa-l-crypto.h"
+#include "../isa-l-crypto/include/aes_xts.h"
+#include "../isa-l-crypto/include/isal_crypto_api.h"
 #endif
 #endif
 
@@ -158,18 +159,15 @@ static int
 _sw_accel_compare(struct iovec *src_iovs, uint32_t src_iovcnt,
 		  struct iovec *src2_iovs, uint32_t src2_iovcnt)
 {
-	struct spdk_ioviter iter;
-	void *src1, *src2;
-	size_t len = spdk_ioviter_first(&iter, src_iovs, src_iovcnt, src2_iovs,
-					src2_iovcnt, &src1, &src2);
-
-	while (len > 0) {
-		if (memcmp(src1, src2, len) != 0) {
-			return -EILSEQ;
-		}
-		len = spdk_ioviter_next(&iter, &src1, &src2);
+	if (spdk_unlikely(src_iovcnt != 1 || src2_iovcnt != 1)) {
+		return -EINVAL;
 	}
-	return 0;
+
+	if (spdk_unlikely(src_iovs[0].iov_len != src2_iovs[0].iov_len)) {
+		return -EINVAL;
+	}
+
+	return memcmp(src_iovs[0].iov_base, src2_iovs[0].iov_base, src_iovs[0].iov_len);
 }
 
 static int

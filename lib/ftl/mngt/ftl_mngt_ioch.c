@@ -105,15 +105,20 @@ io_channel_create_cb(void *io_device, void *ctx)
 		goto fail_sq;
 	}
 
-	spdk_thread_send_msg(dev->core_thread, ftl_dev_register_channel, ioch);
+	if (spdk_thread_send_msg(dev->core_thread, ftl_dev_register_channel, ioch)) {
+		FTL_ERRLOG(dev, "Failed to register IO channel\n");
+		goto fail_poller;
+	}
 
 	_ioch->ioch = ioch;
 	return 0;
 
-fail_sq:
-	spdk_ring_free(ioch->sq);
+fail_poller:
+	spdk_poller_unregister(&ioch->poller);
 fail_cq:
 	spdk_ring_free(ioch->cq);
+fail_sq:
+	spdk_ring_free(ioch->sq);
 fail_io_pool:
 	ftl_mempool_destroy(ioch->map_pool);
 	free(ioch);

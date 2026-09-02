@@ -89,7 +89,6 @@ static uint32_t g_keep_alive_timeout_in_ms = 0;
 static uint8_t g_transport_retry_count = 4;
 static uint8_t g_transport_ack_timeout = 0; /* disabled */
 static bool g_dpdk_mem_single_seg = false;
-static bool g_no_huge = false;
 
 static const char *g_core_mask;
 
@@ -560,19 +559,12 @@ usage(char *program_name)
 #endif
 }
 
-#define RECONNECT_GETOPT_STRING "c:gm:o:q:r:k:s:t:w:A:GM:R:T:"
-static const struct option g_reconnect_cmdline_opts[] = {
-#define RECONNECT_NO_HUGE        257
-	{"no-huge", no_argument, NULL, RECONNECT_NO_HUGE},
-	{0, 0, 0, 0}
-};
-
 static int
 parse_args(int argc, char **argv)
 {
 	struct _trid_entry *trid_entry;
 	const char *workload_type;
-	int op, opt_index;
+	int op;
 	bool mix_specified = false;
 	long int val;
 	int rc;
@@ -587,8 +579,7 @@ parse_args(int argc, char **argv)
 	g_core_mask = NULL;
 	g_max_completions = 0;
 
-	while ((op = getopt_long(argc, argv, RECONNECT_GETOPT_STRING, g_reconnect_cmdline_opts,
-				 &opt_index)) != -1) {
+	while ((op = getopt(argc, argv, "c:gm:o:q:r:k:s:t:w:A:GM:R:T:")) != -1) {
 		switch (op) {
 		case 'm':
 		case 'o':
@@ -680,9 +671,6 @@ parse_args(int argc, char **argv)
 #ifdef DEBUG
 			spdk_log_set_print_level(SPDK_LOG_DEBUG);
 #endif
-			break;
-		case RECONNECT_NO_HUGE:
-			g_no_huge = true;
 			break;
 		default:
 			usage(argv[0]);
@@ -1001,7 +989,6 @@ main(int argc, char **argv)
 		opts.mem_size = g_dpdk_mem;
 	}
 	opts.hugepage_single_segments = g_dpdk_mem_single_seg;
-	opts.no_huge = g_no_huge;
 	if (spdk_env_init(&opts) < 0) {
 		fprintf(stderr, "Unable to initialize SPDK env\n");
 		return 1;

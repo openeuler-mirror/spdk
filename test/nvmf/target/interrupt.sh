@@ -9,7 +9,7 @@ source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 source $rootdir/test/interrupt/common.sh
 
-NQN=nqn.2016-06.io.spdk:cnode$$
+NQN=nqn.2016-06.io.spdk:cnode1
 
 nvmftestinit
 nvmfappstart -m 0x3
@@ -25,9 +25,12 @@ for i in {0..1}; do
 	reactor_is_idle $nvmfpid $i
 done
 
+perf="$SPDK_BIN_DIR/spdk_nvme_perf"
+
 # run traffic
-run_app_bg "$SPDK_BIN_DIR/spdk_nvme_perf" -q 256 -o 4096 -w randrw -M 30 -t 10 -c 0xC \
-	-r "trtype:${TEST_TRANSPORT} adrfam:IPv4 traddr:${NVMF_FIRST_TARGET_IP} trsvcid:${NVMF_PORT} subnqn:${NQN}"
+$perf -q 256 -o 4096 -w randrw -M 30 -t 10 -c 0xC \
+	-r "trtype:${TEST_TRANSPORT} adrfam:IPv4 traddr:${NVMF_FIRST_TARGET_IP} trsvcid:${NVMF_PORT} \
+subnqn:${NQN}" "${NO_HUGE[@]}" &
 
 perf_pid=$!
 

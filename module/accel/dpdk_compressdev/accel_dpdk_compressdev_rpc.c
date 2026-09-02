@@ -8,21 +8,24 @@
 #include "spdk/util.h"
 #include "spdk/string.h"
 #include "spdk/log.h"
-#include "spdk_internal/rpc_autogen.h"
 
-static const struct spdk_json_object_decoder rpc_compressdev_scan_accel_module_decoders[] = {
-	{"pmd", offsetof(struct rpc_compressdev_scan_accel_module_ctx, pmd), spdk_json_decode_uint32},
+struct rpc_compressdev_scan_accel_module {
+	uint32_t pmd;
+};
+
+static const struct spdk_json_object_decoder rpc_compressdev_scan_accel_module_decoder[] = {
+	{"pmd", offsetof(struct rpc_compressdev_scan_accel_module, pmd), spdk_json_decode_uint32},
 };
 
 static void
 rpc_compressdev_scan_accel_module(struct spdk_jsonrpc_request *request,
 				  const struct spdk_json_val *params)
 {
-	struct rpc_compressdev_scan_accel_module_ctx req;
+	struct rpc_compressdev_scan_accel_module req;
 	int rc = 0;
 
-	if (spdk_json_decode_object(params, rpc_compressdev_scan_accel_module_decoders,
-				    SPDK_COUNTOF(rpc_compressdev_scan_accel_module_decoders),
+	if (spdk_json_decode_object(params, rpc_compressdev_scan_accel_module_decoder,
+				    SPDK_COUNTOF(rpc_compressdev_scan_accel_module_decoder),
 				    &req)) {
 		SPDK_ERRLOG("spdk_json_decode_object failed\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_PARSE_ERROR,

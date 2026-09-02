@@ -10,4 +10,3 @@
 -s $B1
 -r $B1 key
 -s bs
--D

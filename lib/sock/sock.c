@@ -12,7 +12,8 @@
 #include "spdk/env.h"
 #include "spdk/util.h"
 #include "spdk/trace.h"
-#include "spdk/fd_group.h"
+#include "spdk/thread.h"
+#include "spdk/string.h"
 #include "spdk_internal/trace_defs.h"
 
 #define SPDK_SOCK_DEFAULT_PRIORITY 0
@@ -27,10 +28,6 @@
 
 static STAILQ_HEAD(, spdk_net_impl) g_net_impls = STAILQ_HEAD_INITIALIZER(g_net_impls);
 static struct spdk_net_impl *g_default_impl;
-static struct spdk_sock_initialize_opts g_init_opts = {
-	.opts_size = sizeof(g_init_opts),
-	.enable_interrupt_mode = true
-};
 
 struct spdk_sock_placement_id_entry {
 	int placement_id;
@@ -264,27 +261,6 @@ const char *
 spdk_sock_get_impl_name(struct spdk_sock *sock)
 {
 	return sock->net_impl->name;
-}
-
-void
-spdk_sock_get_default_initialize_opts(struct spdk_sock_initialize_opts *opts, size_t opts_size)
-{
-	assert(opts);
-
-	opts->opts_size = opts_size;
-
-#define FIELD_OK(field) \
-	offsetof(struct spdk_sock_initialize_opts, field) + sizeof(opts->field) <= opts_size
-
-#define SET_FIELD(field, value) \
-	if (FIELD_OK(field)) { \
-		opts->field = value; \
-	}
-
-	SET_FIELD(enable_interrupt_mode, true);
-
-#undef FIELD_OK
-#undef SET_FIELD
 }
 
 void
@@ -792,12 +768,14 @@ spdk_sock_close(struct spdk_sock **_sock)
 	struct spdk_sock *sock = *_sock;
 
 	if (sock == NULL) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	if (sock->cb_fn != NULL) {
 		/* This sock is still part of a sock_group. */
-		return -EBUSY;
+		errno = EBUSY;
+		return -1;
 	}
 
 	/* Beyond this point the socket is considered closed. */
@@ -819,7 +797,8 @@ ssize_t
 spdk_sock_recv(struct spdk_sock *sock, void *buf, size_t len)
 {
 	if (sock == NULL || sock->flags.closed) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	return sock->net_impl->recv(sock, buf, len);
@@ -829,7 +808,8 @@ ssize_t
 spdk_sock_readv(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 {
 	if (sock == NULL || sock->flags.closed) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	return sock->net_impl->readv(sock, iov, iovcnt);
@@ -839,7 +819,8 @@ ssize_t
 spdk_sock_writev(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 {
 	if (sock == NULL || sock->flags.closed) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	return sock->net_impl->writev(sock, iov, iovcnt);
@@ -858,21 +839,17 @@ spdk_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 	sock->net_impl->writev_async(sock, req);
 }
 
-SPDK_LOG_DEPRECATION_REGISTER(spdk_sock_recv_next,
-			      "upcoming zero-copy receive API should be used instead",
-			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
-
 int
 spdk_sock_recv_next(struct spdk_sock *sock, void **buf, void **ctx)
 {
-	SPDK_LOG_DEPRECATED(spdk_sock_recv_next);
-
 	if (sock == NULL || sock->flags.closed) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	if (sock->group_impl == NULL) {
-		return -ENOTSUP;
+		errno = ENOTSUP;
+		return -1;
 	}
 
 	return sock->net_impl->recv_next(sock, buf, ctx);
@@ -882,7 +859,8 @@ int
 spdk_sock_flush(struct spdk_sock *sock)
 {
 	if (sock == NULL || sock->flags.closed) {
-		return -EBADF;
+		errno = EBADF;
+		return -1;
 	}
 
 	return sock->net_impl->flush(sock);
@@ -924,20 +902,12 @@ spdk_sock_is_connected(struct spdk_sock *sock)
 	return sock->net_impl->is_connected(sock);
 }
 
-static int
-_sock_fd_group_fn(void *ctx)
-{
-	/* Do nothing. The fd group is only used to get the fd. */
-	return 0;
-}
-
 struct spdk_sock_group *
 spdk_sock_group_create(void *ctx)
 {
 	struct spdk_net_impl *impl = NULL;
 	struct spdk_sock_group *group;
 	struct spdk_sock_group_impl *group_impl;
-	int rc, fd;
 
 	group = calloc(1, sizeof(*group));
 	if (group == NULL) {
@@ -947,14 +917,6 @@ spdk_sock_group_create(void *ctx)
 	STAILQ_INIT(&group->group_impls);
 	STAILQ_INIT(&group->pool);
 
-	if (g_init_opts.enable_interrupt_mode) {
-		rc = spdk_fd_group_create(&group->fgrp);
-		if (rc != 0) {
-			free(group);
-			return NULL;
-		}
-	}
-
 	STAILQ_FOREACH_FROM(impl, &g_net_impls, link) {
 		group_impl = impl->group_impl_create();
 		if (group_impl != NULL) {
@@ -962,22 +924,6 @@ spdk_sock_group_create(void *ctx)
 			TAILQ_INIT(&group_impl->socks);
 			group_impl->net_impl = impl;
 			group_impl->group = group;
-
-			if (g_init_opts.enable_interrupt_mode && impl->group_impl_get_interruptfd != NULL) {
-				fd = impl->group_impl_get_interruptfd(group_impl);
-				if (fd <= 0) {
-					assert(false);
-					spdk_sock_group_close(&group);
-					return NULL;
-				}
-
-				rc = spdk_fd_group_add(group->fgrp, fd, _sock_fd_group_fn, NULL, impl->name);
-				if (rc != 0) {
-					assert(false);
-					spdk_sock_group_close(&group);
-					return NULL;
-				}
-			}
 		}
 	}
 
@@ -996,10 +942,6 @@ spdk_sock_group_get_ctx(struct spdk_sock_group *group)
 	return group->ctx;
 }
 
-SPDK_LOG_DEPRECATION_REGISTER(spdk_sock_group_add_sock_callbacks,
-			      "upcoming group-level receive callback should be used instead",
-			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
-
 int
 spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
 			 spdk_sock_cb cb_fn, void *cb_arg)
@@ -1007,24 +949,23 @@ spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
 	struct spdk_sock_group_impl *group_impl = NULL;
 	int rc;
 
-	if (cb_fn != NULL || cb_arg != NULL) {
-		SPDK_LOG_DEPRECATED(spdk_sock_group_add_sock_callbacks);
-	}
-
 	if (cb_fn == NULL) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (sock->group_impl != NULL) {
 		/*
 		 * This sock is already part of a sock_group.
 		 */
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	group_impl = sock_get_group_impl_from_group(sock, group);
 	if (group_impl == NULL) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	rc = group_impl->net_impl->group_impl_add_sock(group_impl, sock);
@@ -1036,6 +977,7 @@ spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
 	sock->group_impl = group_impl;
 	sock->cb_fn = cb_fn;
 	sock->cb_arg = cb_arg;
+
 	return 0;
 }
 
@@ -1047,7 +989,8 @@ spdk_sock_group_remove_sock(struct spdk_sock_group *group, struct spdk_sock *soc
 
 	group_impl = sock_get_group_impl_from_group(sock, group);
 	if (group_impl == NULL) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	assert(group_impl == sock->group_impl);
@@ -1063,16 +1006,10 @@ spdk_sock_group_remove_sock(struct spdk_sock_group *group, struct spdk_sock *soc
 	return rc;
 }
 
-SPDK_LOG_DEPRECATION_REGISTER(spdk_sock_group_provide_buf,
-			      "upcoming zero-copy receive API should be used instead",
-			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
-
 int
 spdk_sock_group_provide_buf(struct spdk_sock_group *group, void *buf, size_t len, void *ctx)
 {
 	struct spdk_sock_group_provided_buf *provided;
-
-	SPDK_LOG_DEPRECATED(spdk_sock_group_provide_buf);
 
 	provided = (struct spdk_sock_group_provided_buf *)buf;
 
@@ -1083,16 +1020,10 @@ spdk_sock_group_provide_buf(struct spdk_sock_group *group, void *buf, size_t len
 	return 0;
 }
 
-SPDK_LOG_DEPRECATION_REGISTER(spdk_sock_group_get_buf,
-			      "upcoming zero-copy receive API should be used instead",
-			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
-
 size_t
 spdk_sock_group_get_buf(struct spdk_sock_group *group, void **buf, void **ctx)
 {
 	struct spdk_sock_group_provided_buf *provided;
-
-	SPDK_LOG_DEPRECATED(spdk_sock_group_get_buf);
 
 	provided = STAILQ_FIRST(&group->pool);
 	if (provided == NULL) {
@@ -1106,24 +1037,29 @@ spdk_sock_group_get_buf(struct spdk_sock_group *group, void **buf, void **ctx)
 	return provided->len;
 }
 
+int
+spdk_sock_group_poll(struct spdk_sock_group *group)
+{
+	return spdk_sock_group_poll_count(group, MAX_EVENTS_PER_POLL);
+}
+
 static int
 sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
 			   struct spdk_sock_group *group,
 			   int max_events)
 {
 	struct spdk_sock *socks[MAX_EVENTS_PER_POLL];
-	int num_events, i, rc;
+	int num_events, i;
 
 	if (TAILQ_EMPTY(&group_impl->socks)) {
 		return 0;
 	}
 
-	rc = group_impl->net_impl->group_impl_poll(group_impl, max_events, socks);
-	if (rc < 0) {
-		return rc;
+	num_events = group_impl->net_impl->group_impl_poll(group_impl, max_events, socks);
+	if (num_events == -1) {
+		return -1;
 	}
 
-	num_events = rc;
 	for (i = 0; i < num_events; i++) {
 		struct spdk_sock *sock = socks[i];
 		assert(sock->cb_fn != NULL);
@@ -1133,14 +1069,15 @@ sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
 	return num_events;
 }
 
-static int
-sock_group_poll_count(struct spdk_sock_group *group, int max_events)
+int
+spdk_sock_group_poll_count(struct spdk_sock_group *group, int max_events)
 {
 	struct spdk_sock_group_impl *group_impl = NULL;
 	int rc, num_events = 0;
 
 	if (max_events < 1) {
-		return -EINVAL;
+		errno = -EINVAL;
+		return -1;
 	}
 
 	/*
@@ -1166,66 +1103,38 @@ sock_group_poll_count(struct spdk_sock_group *group, int max_events)
 }
 
 int
-spdk_sock_group_poll(struct spdk_sock_group *group)
-{
-	return sock_group_poll_count(group, MAX_EVENTS_PER_POLL);
-}
-
-SPDK_LOG_DEPRECATION_REGISTER(spdk_sock_group_poll_count,
-			      "use spdk_sock_group_poll instead",
-			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
-
-int
-spdk_sock_group_poll_count(struct spdk_sock_group *group, int max_events)
-{
-	SPDK_LOG_DEPRECATED(spdk_sock_group_poll_count);
-	return sock_group_poll_count(group, max_events);
-}
-
-int
-spdk_sock_group_close(struct spdk_sock_group **_group)
+spdk_sock_group_close(struct spdk_sock_group **group)
 {
 	struct spdk_sock_group_impl *group_impl = NULL, *tmp;
-	struct spdk_sock_group *group;
-	int rc, fd;
+	int rc;
 
-	if (_group == NULL || (*_group) == NULL) {
-		return -EBADF;
+	if (*group == NULL) {
+		errno = EBADF;
+		return -1;
 	}
 
-	group = *_group;
-
-	STAILQ_FOREACH_SAFE(group_impl, &group->group_impls, link, tmp) {
+	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
 		if (!TAILQ_EMPTY(&group_impl->socks)) {
-			return -EBUSY;
+			errno = EBUSY;
+			return -1;
 		}
 	}
 
-	STAILQ_FOREACH_SAFE(group_impl, &group->group_impls, link, tmp) {
-		if (g_init_opts.enable_interrupt_mode && group_impl->net_impl->group_impl_get_interruptfd != NULL) {
-			fd = group_impl->net_impl->group_impl_get_interruptfd(group_impl);
-			if (fd > 0) {
-				spdk_fd_group_remove(group->fgrp, fd);
-			}
-		}
-
+	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
 		rc = group_impl->net_impl->group_impl_close(group_impl);
 		if (rc != 0) {
 			SPDK_ERRLOG("group_impl_close for net failed\n");
 		}
 	}
 
-	if (group->fgrp != NULL) {
-		spdk_fd_group_destroy(group->fgrp);
-	}
+	free(*group);
+	*group = NULL;
 
-	free(group);
-	*_group = NULL;
 	return 0;
 }
 
-struct spdk_net_impl *
-spdk_net_impl_get_by_name(const char *impl_name)
+static inline struct spdk_net_impl *
+sock_get_impl_by_name(const char *impl_name)
 {
 	struct spdk_net_impl *impl;
 
@@ -1245,38 +1154,43 @@ spdk_sock_impl_get_opts(const char *impl_name, struct spdk_sock_impl_opts *opts,
 	struct spdk_net_impl *impl;
 
 	if (!impl_name || !opts || !len) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
-	impl = spdk_net_impl_get_by_name(impl_name);
+	impl = sock_get_impl_by_name(impl_name);
 	if (!impl) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (!impl->get_opts) {
-		return -ENOTSUP;
+		errno = ENOTSUP;
+		return -1;
 	}
 
 	return impl->get_opts(opts, len);
 }
 
 int
-spdk_sock_impl_set_opts(const char *impl_name, const struct spdk_sock_impl_opts *opts,
-			size_t len)
+spdk_sock_impl_set_opts(const char *impl_name, const struct spdk_sock_impl_opts *opts, size_t len)
 {
 	struct spdk_net_impl *impl;
 
 	if (!impl_name || !opts) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
-	impl = spdk_net_impl_get_by_name(impl_name);
+	impl = sock_get_impl_by_name(impl_name);
 	if (!impl) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (!impl->set_opts) {
-		return -ENOTSUP;
+		errno = ENOTSUP;
+		return -1;
 	}
 
 	return impl->set_opts(opts, len);
@@ -1339,91 +1253,20 @@ spdk_net_impl_register(struct spdk_net_impl *impl)
 	STAILQ_INSERT_HEAD(&g_net_impls, impl, link);
 }
 
-static bool
-sock_init_opts_match(struct spdk_sock_initialize_opts *opts1,
-		     struct spdk_sock_initialize_opts *opts2)
-{
-	if (opts1->opts_size != opts2->opts_size) {
-		return false;
-	}
-
-	if (opts1->enable_interrupt_mode != opts2->enable_interrupt_mode) {
-		return false;
-	}
-
-	return true;
-}
-
-int
-spdk_sock_initialize(struct spdk_sock_initialize_opts *user_opts)
-{
-	struct spdk_sock_initialize_opts opts_local;
-	struct spdk_net_impl *impl, *tmp;
-	static bool g_initialized = false;
-	int rc;
-
-	/* Initialize opts_local with defaults */
-	spdk_sock_get_default_initialize_opts(&opts_local, sizeof(opts_local));
-
-	/* If user_opts is provided, use ABI-safe field access based on opts_size */
-	if (user_opts != NULL) {
-		size_t opts_size;
-
-		/* Get the user's opts_size */
-		opts_size = user_opts->opts_size;
-
-		/* Copy fields that are within the user's opts_size */
-#define FIELD_OK(field) \
-	offsetof(struct spdk_sock_initialize_opts, field) + sizeof(opts_local.field) <= opts_size
-
-		if (FIELD_OK(enable_interrupt_mode)) {
-			opts_local.enable_interrupt_mode = user_opts->enable_interrupt_mode;
-		}
-
-#undef FIELD_OK
-	}
-
-	if (g_initialized) {
-		/* If already initialized, check if the options match */
-		if (sock_init_opts_match(&opts_local, &g_init_opts)) {
-			return 0;
-		} else {
-			return -EALREADY;
-		}
-	}
-
-	/* Store the options for future comparison */
-	memcpy(&g_init_opts, &opts_local, sizeof(g_init_opts));
-
-	g_initialized = true;
-
-	STAILQ_FOREACH_SAFE(impl, &g_net_impls, link, tmp) {
-		if (impl->init) {
-			rc = impl->init(&opts_local);
-			if (rc != 0) {
-				SPDK_WARNLOG("Removing %s net impl - initialization failed: %d\n",
-					     impl->name, rc);
-				STAILQ_REMOVE(&g_net_impls, impl, spdk_net_impl, link);
-				continue;
-			}
-		}
-	}
-
-	return 0;
-}
-
 int
 spdk_sock_set_default_impl(const char *impl_name)
 {
 	struct spdk_net_impl *impl;
 
 	if (!impl_name) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
-	impl = spdk_net_impl_get_by_name(impl_name);
+	impl = sock_get_impl_by_name(impl_name);
 	if (!impl) {
-		return -EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (impl == g_default_impl) {
@@ -1438,6 +1281,7 @@ spdk_sock_set_default_impl(const char *impl_name)
 	}
 
 	g_default_impl = impl;
+
 	return 0;
 }
 
@@ -1452,19 +1296,36 @@ spdk_sock_get_default_impl(void)
 }
 
 int
-spdk_sock_group_get_interruptfd(struct spdk_sock_group *group)
+spdk_sock_group_register_interrupt(struct spdk_sock_group *group, uint32_t events,
+				   spdk_interrupt_fn fn,
+				   void *arg, const char *name)
 {
+	struct spdk_sock_group_impl *group_impl = NULL;
+	int rc;
+
+	assert(group != NULL);
+	assert(fn != NULL);
+
+	STAILQ_FOREACH_FROM(group_impl, &group->group_impls, link) {
+		rc = group_impl->net_impl->group_impl_register_interrupt(group_impl, events, fn, arg, name);
+		if (rc != 0) {
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
+void
+spdk_sock_group_unregister_interrupt(struct spdk_sock_group *group)
+{
+	struct spdk_sock_group_impl *group_impl = NULL;
+
 	assert(group != NULL);
 
-	if (!g_init_opts.enable_interrupt_mode) {
-		return -ENOTSUP;
+	STAILQ_FOREACH_FROM(group_impl, &group->group_impls, link) {
+		group_impl->net_impl->group_impl_unregister_interrupt(group_impl);
 	}
-
-	if (group->fgrp == NULL) {
-		return -ENOTSUP;
-	}
-
-	return spdk_fd_group_get_fd(group->fgrp);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(sock)

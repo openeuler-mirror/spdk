@@ -11,22 +11,31 @@
 #include "spdk/util.h"
 #include "spdk/thread.h"
 
-#include "spdk_internal/rpc_autogen.h"
 #include "tgt_internal.h"
 
-static const struct spdk_json_object_decoder rpc_vfu_tgt_set_base_path_decoders[] = {
-	{"path", offsetof(struct rpc_vfu_tgt_set_base_path_ctx, path), spdk_json_decode_string }
+struct rpc_set_vfu_path {
+	char		*path;
+};
+
+static const struct spdk_json_object_decoder rpc_set_vfu_path_decode[] = {
+	{"path", offsetof(struct rpc_set_vfu_path, path), spdk_json_decode_string }
 };
 
 static void
-rpc_vfu_tgt_set_base_path(struct spdk_jsonrpc_request *request,
-			  const struct spdk_json_val *params)
+free_rpc_set_vfu_path(struct rpc_set_vfu_path *req)
 {
-	struct rpc_vfu_tgt_set_base_path_ctx req = {};
+	free(req->path);
+}
+
+static void
+rpc_vfu_set_base_path(struct spdk_jsonrpc_request *request,
+		      const struct spdk_json_val *params)
+{
+	struct rpc_set_vfu_path req = {0};
 	int rc;
 
-	if (spdk_json_decode_object(params, rpc_vfu_tgt_set_base_path_decoders,
-				    SPDK_COUNTOF(rpc_vfu_tgt_set_base_path_decoders),
+	if (spdk_json_decode_object(params, rpc_set_vfu_path_decode,
+				    SPDK_COUNTOF(rpc_set_vfu_path_decode),
 				    &req)) {
 		SPDK_ERRLOG("spdk_json_decode_object failed\n");
 		rc = -EINVAL;
@@ -37,14 +46,15 @@ rpc_vfu_tgt_set_base_path(struct spdk_jsonrpc_request *request,
 	if (rc < 0) {
 		goto invalid;
 	}
-	free_rpc_vfu_tgt_set_base_path(&req);
+	free_rpc_set_vfu_path(&req);
 
 	spdk_jsonrpc_send_bool_response(request, true);
 	return;
 
 invalid:
-	free_rpc_vfu_tgt_set_base_path(&req);
+	free_rpc_set_vfu_path(&req);
 	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 					 spdk_strerror(-rc));
 }
-SPDK_RPC_REGISTER("vfu_tgt_set_base_path", rpc_vfu_tgt_set_base_path, SPDK_RPC_RUNTIME)
+SPDK_RPC_REGISTER("vfu_tgt_set_base_path", rpc_vfu_set_base_path,
+		  SPDK_RPC_RUNTIME)

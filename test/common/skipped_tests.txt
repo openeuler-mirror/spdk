@@ -63,13 +63,11 @@ vhost_scsi_cores_2ctrl
 busy
 balanced
 core_load
-load_balancing
 
 # Disabled due to https://github.com/spdk/spdk/issues/3345
 nvmf_device_removal
 nvmf_device_removal_pci_remove_no_srq
 nvmf_device_removal_pci_remove
-nvmf_device_removal_bond_slaves
 
 # Disabled due to mlx5 HW/build dependency
 accel_mlx5_crypto
@@ -87,8 +85,11 @@ accel_cdev_decomp_full_mcore
 accel_cdev_decomp_full_mthread
 accel_cdev_decomp_mcore
 accel_cdev_decomp_mthread
+acl
+allowed
 autobuild
 autobuild_external_code
+autobuild_llvm_precompile
 bdev_crypto_enomem
 blockdev_crypto_aesni
 blockdev_crypto_qat
@@ -100,7 +101,13 @@ build_shared_rpm
 chaining
 cmb_copy
 core_isolating
+custom_alloc
+denied
+devices
+dm_mount
 dpdk_governor
+driver
+even_2G_alloc
 external_make_accel_driver_shared
 external_make_accel_driver_static
 external_make_accel_module_shared
@@ -127,13 +134,19 @@ external_run_nvme_shared
 external_run_nvme_static
 framework_get_governor
 go_rpc
+guess_driver
+hugepages
 idle
 interrupt_mode
 ioat
 ioat_perf
 ioat_verify
 iscsi_tgt_calsoft
+iscsi_tgt_data_digest
+iscsi_tgt_ext4test
 iscsi_tgt_rbd
+llvm_fuzz
+no_shrink_alloc
 nvme_cli_cuse
 nvme_cli_plugin
 nvme_cmb
@@ -143,6 +156,7 @@ nvme_cuse_rpc
 nvme_fdp
 nvme_flexible_data_placement
 nvme_interrupt
+nvme_mount
 nvme_ns_manage_cuse
 nvme_pcie_intr_mode
 nvme_pcie_poll_mode
@@ -150,6 +164,7 @@ nvme_pmr
 nvme_pmr_persistence
 nvme_smartctl_cuse
 nvme_xnvme
+nvmf_llvm_fuzz
 nvmf_perf_adq
 nvmf_vhost
 ocf
@@ -161,11 +176,14 @@ ocf_flush
 ocf_multicore
 ocf_remove
 ocf_stats
+odd_alloc
 packaging
 rpm_packaging
 scheduler
 scheduler_opts
 scheduler_rpc
+setup.sh
+single_node_setup
 sma
 sma_crypto
 sma_discovery
@@ -184,6 +202,15 @@ test_save_ublk_config
 ublk
 ublk_recovery
 unittest_idxd_user
+valgrind
+vfio_llvm_fuzz
+vfio_user_nvme_fio
+vfio_user_nvme_restart_vm
+vfio_user_qemu
+vfio_user_virtio_bdevperf
+vfio_user_virtio_blk_restart_vm
+vfio_user_virtio_fs_fio
+vfio_user_virtio_scsi_restart_vm
 vhost
 vhost_blk_lvol_integrity
 vhost_blk_packed_ring_integrity
@@ -196,6 +223,3 @@ vhost_shared
 xnvme_bdevperf
 xnvme_fio_plugin
 xnvme_rpc
-
-# Temporarily disabled as part of no-huge rafactor
-nvmf_bdevio_no_huge

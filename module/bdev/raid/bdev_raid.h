@@ -7,11 +7,41 @@
 #define SPDK_BDEV_RAID_INTERNAL_H
 
 #include "spdk/bdev_module.h"
-#include "spdk/module/bdev/raid.h"
 #include "spdk/uuid.h"
 
 #define RAID_BDEV_MIN_DATA_OFFSET_SIZE	(1024*1024) /* 1 MiB */
 
+enum raid_level {
+	INVALID_RAID_LEVEL	= -1,
+	RAID0			= 0,
+	RAID1			= 1,
+	RAID5F			= 95, /* 0x5f */
+	CONCAT			= 99,
+};
+
+/*
+ * Raid state describes the state of the raid. This raid bdev can be either in
+ * configured list or configuring list
+ */
+enum raid_bdev_state {
+	/* raid bdev is ready and is seen by upper layers */
+	RAID_BDEV_STATE_ONLINE,
+
+	/*
+	 * raid bdev is configuring, not all underlying bdevs are present.
+	 * And can't be seen by upper layers.
+	 */
+	RAID_BDEV_STATE_CONFIGURING,
+
+	/*
+	 * In offline state, raid bdev layer will complete all incoming commands without
+	 * submitting to underlying base nvme bdevs
+	 */
+	RAID_BDEV_STATE_OFFLINE,
+
+	/* raid bdev state max, new states should be added before this */
+	RAID_BDEV_STATE_MAX
+};
 
 enum raid_process_type {
 	RAID_PROCESS_NONE,
@@ -19,7 +49,7 @@ enum raid_process_type {
 	RAID_PROCESS_MAX
 };
 
-typedef void (*raid_bdev_action_cb)(void *ctx, int rc);
+typedef void (*raid_base_bdev_cb)(void *ctx, int status);
 
 /*
  * raid_base_bdev_info contains information for the base bdevs which are part of some
@@ -56,7 +86,7 @@ struct raid_base_bdev_info {
 	bool			remove_scheduled;
 
 	/* callback for base bdev removal */
-	raid_bdev_action_cb	remove_cb;
+	raid_base_bdev_cb	remove_cb;
 
 	/* context of the callback */
 	void			*remove_cb_ctx;
@@ -77,7 +107,7 @@ struct raid_base_bdev_info {
 	bool			is_failed;
 
 	/* callback for base bdev configuration */
-	raid_bdev_action_cb	configure_cb;
+	raid_base_bdev_cb	configure_cb;
 
 	/* context of the callback */
 	void			*configure_cb_ctx;
@@ -145,6 +175,8 @@ struct raid_bdev_process_request {
 	TAILQ_ENTRY(raid_bdev_process_request) link;
 };
 
+typedef void (*raid_bdev_configure_cb)(void *cb_ctx, int rc);
+
 /*
  * raid_bdev is the single entity structure which contains SPDK block device
  * and the information related to any raid bdev either configured or
@@ -173,7 +205,7 @@ struct raid_bdev {
 	uint32_t			strip_size_shift;
 
 	/* state of raid bdev */
-	enum spdk_bdev_raid_state	state;
+	enum raid_bdev_state		state;
 
 	/* number of base bdevs comprising raid bdev  */
 	uint8_t				num_base_bdevs;
@@ -191,7 +223,7 @@ struct raid_bdev {
 	uint8_t				min_base_bdevs_operational;
 
 	/* Raid Level of this raid bdev */
-	enum spdk_bdev_raid_level	level;
+	enum raid_level			level;
 
 	/* Set to true if destroy of this raid bdev is started. */
 	bool				destroy_started;
@@ -206,23 +238,16 @@ struct raid_bdev {
 	bool				superblock_enabled;
 	struct raid_bdev_superblock	*sb;
 
-	/* Superblock buffers used for I/O */
+	/* Superblock buffer used for I/O */
 	void				*sb_io_buf;
 	uint32_t			sb_io_buf_size;
-	void				*sb_io_md_buf;
-	uint32_t			sb_io_md_buf_size;
 
 	/* Raid bdev background process, e.g. rebuild */
 	struct raid_bdev_process	*process;
 
 	/* Callback and context for raid_bdev configuration */
-	raid_bdev_action_cb		configure_cb;
+	raid_bdev_configure_cb		configure_cb;
 	void				*configure_cb_ctx;
-	int				configure_cb_status;
-
-	/* Callback and context for raid_bdev destruction */
-	raid_bdev_action_cb		destroy_cb;
-	void				*destroy_cb_ctx;
 };
 
 #define RAID_FOR_EACH_BASE_BDEV(r, i) \
@@ -235,28 +260,29 @@ TAILQ_HEAD(raid_all_tailq, raid_bdev);
 
 extern struct raid_all_tailq		g_raid_bdev_list;
 
+typedef void (*raid_bdev_destruct_cb)(void *cb_ctx, int rc);
+
 int raid_bdev_create(const char *name, uint32_t strip_size, uint8_t num_base_bdevs,
-		     char **base_bdev_names, enum spdk_bdev_raid_level level, bool superblock_enabled,
-		     const struct spdk_uuid *uuid, raid_bdev_action_cb cb_fn, void *cb_ctx);
-void raid_bdev_delete(struct raid_bdev *raid_bdev, bool clear_sb, raid_bdev_action_cb cb_fn,
-		      void *cb_ctx);
+		     enum raid_level level, bool superblock, const struct spdk_uuid *uuid,
+		     struct raid_bdev **raid_bdev_out);
+void raid_bdev_delete(struct raid_bdev *raid_bdev, raid_bdev_destruct_cb cb_fn, void *cb_ctx);
 int raid_bdev_add_base_bdev(struct raid_bdev *raid_bdev, const char *name,
-			    raid_bdev_action_cb cb_fn, void *cb_ctx);
+			    raid_base_bdev_cb cb_fn, void *cb_ctx);
 struct raid_bdev *raid_bdev_find_by_name(const char *name);
-enum spdk_bdev_raid_level raid_bdev_str_to_level(const char *str);
-const char *raid_bdev_level_to_str(enum spdk_bdev_raid_level level);
-const char *raid_bdev_state_to_str(enum spdk_bdev_raid_state state);
+enum raid_level raid_bdev_str_to_level(const char *str);
+const char *raid_bdev_level_to_str(enum raid_level level);
+enum raid_bdev_state raid_bdev_str_to_state(const char *str);
+const char *raid_bdev_state_to_str(enum raid_bdev_state state);
 const char *raid_bdev_process_to_str(enum raid_process_type value);
 void raid_bdev_write_info_json(struct raid_bdev *raid_bdev, struct spdk_json_write_ctx *w);
-int raid_bdev_remove_base_bdev(struct spdk_bdev *base_bdev, raid_bdev_action_cb cb_fn,
-			       void *cb_ctx);
+int raid_bdev_remove_base_bdev(struct spdk_bdev *base_bdev, raid_base_bdev_cb cb_fn, void *cb_ctx);
 
 /*
  * RAID module descriptor
  */
 struct raid_bdev_module {
 	/* RAID level implemented by this module */
-	enum spdk_bdev_raid_level level;
+	enum raid_level level;
 
 	/* Minimum required number of base bdevs. Must be > 0. */
 	uint8_t base_bdevs_min;
@@ -526,8 +552,6 @@ int raid_bdev_alloc_superblock(struct raid_bdev *raid_bdev, uint32_t block_size)
 void raid_bdev_free_superblock(struct raid_bdev *raid_bdev);
 void raid_bdev_init_superblock(struct raid_bdev *raid_bdev);
 void raid_bdev_write_superblock(struct raid_bdev *raid_bdev, raid_bdev_write_sb_cb cb,
-				void *cb_ctx);
-void raid_bdev_clear_superblock(struct raid_bdev *raid_bdev, raid_bdev_write_sb_cb cb,
 				void *cb_ctx);
 int raid_bdev_load_base_bdev_superblock(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 					raid_bdev_load_sb_cb cb, void *cb_ctx);

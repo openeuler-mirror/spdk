@@ -4,9 +4,10 @@
 #  All rights reserved.
 #
 
-import base64
-import json
 import sys
+import json
+import base64
+import struct
 
 buf = sys.stdin.readlines()
 json = json.loads(" ".join(buf))

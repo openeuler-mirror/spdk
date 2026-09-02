@@ -13,7 +13,7 @@ source $rootdir/test/common/autotest_common.sh
 
 trap 'killprocess $spdk_tgt_pid' EXIT
 
-run_app_bg $SPDK_BIN_DIR/spdk_tgt --rpcs-allowed spdk_get_version,rpc_get_methods
+$SPDK_BIN_DIR/spdk_tgt --rpcs-allowed spdk_get_version,rpc_get_methods &
 spdk_tgt_pid=$!
 waitforlisten $spdk_tgt_pid
 

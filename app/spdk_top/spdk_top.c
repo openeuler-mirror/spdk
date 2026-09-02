@@ -27,7 +27,7 @@
 #endif
 
 #define RPC_MAX_THREADS 1024
-#define RPC_MAX_POLLERS 8192
+#define RPC_MAX_POLLERS 1024
 #define RPC_MAX_CORES 1024
 #define MAX_THREAD_NAME 128
 #define MAX_POLLER_NAME 128
@@ -261,7 +261,6 @@ struct rpc_core_info {
 	bool in_interrupt;
 	struct rpc_core_threads threads;
 	uint64_t tid;
-	int32_t numa_id;
 };
 
 struct rpc_scheduler {
@@ -385,9 +384,7 @@ rpc_decode_pollers_array(struct spdk_json_val *poller, struct rpc_poller_info *o
 
 	for (poller = spdk_json_array_first(poller); poller != NULL; poller = spdk_json_next(poller)) {
 		out[*poller_count].thread_id = thread_id;
-		snprintf(out[*poller_count].thread_name,
-			 sizeof(out[*poller_count].thread_name), "%s",
-			 thread_name);
+		memcpy(out[*poller_count].thread_name, thread_name, sizeof(char) * thread_name_length);
 		out[*poller_count].type = poller_type;
 
 		rc = spdk_json_decode_object(poller, rpc_pollers_decoders,
@@ -524,7 +521,6 @@ static const struct spdk_json_object_decoder rpc_core_info_decoders[] = {
 	{"in_interrupt", offsetof(struct rpc_core_info, in_interrupt), spdk_json_decode_bool},
 	{"lw_threads", offsetof(struct rpc_core_info, threads), rpc_decode_cores_lw_threads},
 	{"tid", offsetof(struct rpc_core_info, tid), spdk_json_decode_uint64},
-	{"numa_id", offsetof(struct rpc_core_info, numa_id), spdk_json_decode_int32},
 };
 
 static int

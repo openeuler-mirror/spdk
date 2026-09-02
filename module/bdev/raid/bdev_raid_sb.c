@@ -57,9 +57,6 @@ raid_bdev_free_superblock(struct raid_bdev *raid_bdev)
 		spdk_dma_free(raid_bdev->sb_io_buf);
 		raid_bdev->sb_io_buf = NULL;
 	}
-
-	spdk_dma_free(raid_bdev->sb_io_md_buf);
-	raid_bdev->sb_io_md_buf = NULL;
 	spdk_dma_free(raid_bdev->sb);
 	raid_bdev->sb = NULL;
 }
@@ -111,17 +108,6 @@ raid_bdev_alloc_sb_io_buf(struct raid_bdev *raid_bdev)
 	} else {
 		raid_bdev->sb_io_buf_size = SPDK_ALIGN_CEIL(sb->length, raid_bdev->bdev.blocklen);
 		raid_bdev->sb_io_buf = raid_bdev->sb;
-
-		if (spdk_bdev_is_md_separate(&raid_bdev->bdev)) {
-			assert(raid_bdev->sb_io_md_buf == NULL);
-			raid_bdev->sb_io_md_buf_size = raid_bdev->sb_io_buf_size / raid_bdev->bdev.blocklen *
-						       spdk_bdev_get_md_size(&raid_bdev->bdev);
-			raid_bdev->sb_io_md_buf = spdk_dma_zmalloc(raid_bdev->sb_io_md_buf_size, 0x1000, NULL);
-			if (!raid_bdev->sb_io_md_buf) {
-				SPDK_ERRLOG("Failed to allocate raid bdev sb io metadata buffer\n");
-				return -ENOMEM;
-			}
-		}
 	}
 
 	return 0;
@@ -369,10 +355,9 @@ _raid_bdev_write_superblock(void *_ctx)
 			continue;
 		}
 
-		rc = spdk_bdev_write_blocks_with_md(base_info->desc, base_info->app_thread_ch,
-						    raid_bdev->sb_io_buf, raid_bdev->sb_io_md_buf, 0,
-						    raid_bdev->sb_io_buf_size / raid_bdev->bdev.blocklen,
-						    raid_bdev_write_superblock_cb, ctx);
+		rc = spdk_bdev_write(base_info->desc, base_info->app_thread_ch,
+				     raid_bdev->sb_io_buf, 0, raid_bdev->sb_io_buf_size,
+				     raid_bdev_write_superblock_cb, ctx);
 		if (rc != 0) {
 			struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(base_info->desc);
 
@@ -405,12 +390,6 @@ raid_bdev_write_superblock(struct raid_bdev *raid_bdev, raid_bdev_write_sb_cb cb
 	assert(sb != NULL);
 	assert(cb != NULL);
 
-	if (sb->length == 0) {
-		SPDK_DEBUGLOG(bdev_raid_sb, "Superblock length is zero, cannot write superblock\n");
-		rc = -EINVAL;
-		goto err;
-	}
-
 	if (raid_bdev->sb_io_buf == NULL) {
 		rc = raid_bdev_alloc_sb_io_buf(raid_bdev);
 		if (rc != 0) {
@@ -440,48 +419,6 @@ raid_bdev_write_superblock(struct raid_bdev *raid_bdev, raid_bdev_write_sb_cb cb
 			memcpy(raid_bdev->sb_io_buf + (i * raid_bdev->bdev.blocklen),
 			       sb_buf + (i * sb->block_size), sb->block_size);
 		}
-	}
-
-	_raid_bdev_write_superblock(ctx);
-	return;
-err:
-	cb(rc, raid_bdev, cb_ctx);
-}
-
-void
-raid_bdev_clear_superblock(struct raid_bdev *raid_bdev, raid_bdev_write_sb_cb cb, void *cb_ctx)
-{
-	struct raid_bdev_write_sb_ctx *ctx;
-	int rc;
-
-	assert(spdk_get_thread() == spdk_thread_get_app_thread());
-	assert(raid_bdev->sb != NULL);
-	assert(cb != NULL);
-
-	if (raid_bdev->sb_io_buf == NULL) {
-		rc = raid_bdev_alloc_sb_io_buf(raid_bdev);
-		if (rc != 0) {
-			goto err;
-		}
-	}
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		rc = -ENOMEM;
-		goto err;
-	}
-
-	ctx->raid_bdev = raid_bdev;
-	ctx->remaining = raid_bdev->num_base_bdevs + 1;
-	ctx->cb = cb;
-	ctx->cb_ctx = cb_ctx;
-
-	memset(raid_bdev->sb_io_buf, 0, raid_bdev->sb_io_buf_size);
-	if (raid_bdev->sb_io_md_buf != NULL) {
-		memset(raid_bdev->sb_io_md_buf, 0, raid_bdev->sb_io_md_buf_size);
-	}
-	if (raid_bdev->sb_io_buf != raid_bdev->sb) {
-		memset(raid_bdev->sb, 0, raid_bdev->sb->length);
 	}
 
 	_raid_bdev_write_superblock(ctx);

@@ -87,8 +87,6 @@ struct spdk_trace_parser_entry {
 	uint64_t		object_start;
 	/** Logical core number */
 	uint16_t		lcore;
-	/** Thread name associated with this lcore */
-	const char		*tname;
 	/** Related object index */
 	uint64_t		related_index;
 	/** Related object type */

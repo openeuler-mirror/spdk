@@ -9,9 +9,10 @@
 #include "spdk/thread.h"
 #include "spdk/likely.h"
 #include "spdk/log.h"
-#include "spdk/init.h"
+
 #include "spdk/vmd.h"
 
+#include "spdk_internal/init.h"
 #include "event_vmd.h"
 
 static struct spdk_poller *g_hotplug_poller;

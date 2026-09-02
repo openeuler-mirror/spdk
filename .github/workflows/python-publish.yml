@@ -27,8 +27,9 @@ jobs:
         run: |
           # cuse is not needed for make version target and installing it just takes time and bring no value
           ./configure --without-nvme-cuse
-          python -m pip install build twine
-          make -C python check
+          make -C python spdk/version.py
+          python -m pip install build
+          python -m build python/
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
