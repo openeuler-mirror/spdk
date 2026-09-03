@@ -869,7 +869,7 @@ def add_parser(subparsers):
                                             block_size=args.block_size,
                                             cluster_name=args.cluster_name,
                                             uuid=args.uuid,
-                                            read_only=args.read_only))
+                                            read_only=args.readonly))
 
     p = subparsers.add_parser('bdev_rbd_create', help='Add a bdev with ceph rbd backend')
     p.add_argument('-b', '--name', help="Name of the bdev")

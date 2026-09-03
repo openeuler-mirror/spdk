@@ -122,6 +122,9 @@ CONFIG_UBLK=n
 # Build vhost library.
 CONFIG_VHOST=y
 
+# Build ssam library.
+CONFIG_SSAM=y
+
 # Build vhost initiator (Virtio) driver.
 CONFIG_VIRTIO=y
 

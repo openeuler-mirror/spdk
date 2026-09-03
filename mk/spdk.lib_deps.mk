@@ -192,6 +192,7 @@ DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
 DEPDIRS-event_fsdev := init fsdev
+DEPDIRS-event_ssam := init ssam event_scsi
 
 # module/vfu_device
 

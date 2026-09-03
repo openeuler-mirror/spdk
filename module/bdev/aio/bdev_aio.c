@@ -64,9 +64,6 @@ struct file_disk {
 	struct spdk_bdev	disk;
 	char			*filename;
 	int			fd;
-#ifdef RWF_NOWAIT
-	bool			use_nowait;
-#endif
 	TAILQ_ENTRY(file_disk)  link;
 	bool			block_size_override;
 	bool			readonly;
@@ -116,9 +113,6 @@ bdev_aio_open(struct file_disk *disk)
 {
 	int fd;
 	int io_flag = disk->readonly ? O_RDONLY : O_RDWR;
-#ifdef RWF_NOWAIT
-	struct stat st;
-#endif
 
 	fd = open(disk->filename, io_flag | O_DIRECT);
 	if (fd < 0) {
@@ -134,13 +128,6 @@ bdev_aio_open(struct file_disk *disk)
 
 	disk->fd = fd;
 
-#ifdef RWF_NOWAIT
-	/* Some aio operations can block, for example if number outstanding
-	 * I/O exceeds number of block layer tags. But not all files can
-	 * support RWF_NOWAIT flag. So use RWF_NOWAIT on block devices only.
-	 */
-	disk->use_nowait = fstat(fd, &st) == 0 && S_ISBLK(st.st_mode);
-#endif
 
 	return 0;
 }
@@ -219,11 +206,6 @@ bdev_aio_submit_io(enum spdk_bdev_io_type type, struct file_disk *fdisk,
 		io_set_eventfd(iocb, aio_ch->group_ch->efd);
 	}
 	iocb->data = aio_task;
-#if defined(RWF_NOWAIT) && defined(SPDK_CONFIG_AIO_HAVE_RW_FLAGS)
-	if (fdisk->use_nowait) {
-		iocb->aio_rw_flags = RWF_NOWAIT;
-	}
-#endif
 	aio_task->len = nbytes;
 	aio_task->ch = aio_ch;
 
