@@ -137,6 +137,8 @@ ssam_fs_stop_io_channel(void *ctx)
 static void
 ssam_fs_event_cb(struct ssam_fsdev_object *fsdev_obj)
 {
+	fsdev_obj->delete_flag = true;
+
 	if (fsdev_obj->fuse_disp) {
 		spdk_thread_send_msg(fsdev_obj->init_thread, ssam_fs_fuse_disp_delete, fsdev_obj);
 	}
@@ -152,8 +154,6 @@ ssam_fs_event_cb(struct ssam_fsdev_object *fsdev_obj)
 			}
 		}
 	}
-
-	fsdev_obj->delete_flag = true;
 }
 
 static void
@@ -568,6 +568,7 @@ ssam_fuse_share_memory(struct spdk_ssam_fs_session *fsmsession)
 	} else if (in->opcode == SSAM_FUSE_OPCODE_DESTROY) {
 		snprintf(name, sizeof(name), "shm_name%d", fsmsession->fsdev_obj->gfunc_id);
 		shm_unlink(name);
+		fsmsession->fsdev_obj->mounted = false;
 		SPDK_NOTICELOG("success close shm_mount\n");
 	}
 
@@ -1108,6 +1109,10 @@ ssam_fs_fuse_req_done(void *cb_arg, int error)
 		if (out->len != sizeof(struct fuse_out_header)) {
 			fsmsession->out_iov[1].iov_len = out->len - sizeof(struct fuse_out_header);
 		}
+
+		if (in->opcode == SSAM_FUSE_OPCODE_INIT) {
+			fsmsession->fsdev_obj->mounted = true;
+		}
 	}
 
 	fuse_udaa_writev(fsmsession->out_iov, fsmsession->out_iovcnt, fsmsession, fsmsession->fsdev_obj);
@@ -1289,6 +1294,13 @@ ssam_free_data_session(struct ssam_fsdev_object *fsdev_obj, struct spdk_ssam_fs_
 		return;
 	}
 
+	/* During force-delete cleanup, the cleanup poller still owns the queues. Skip 
+	 * teardown here; ssam_dev_io_scan_poller will clear mounted after it receives
+	 * FUSE_DESTROY, and then this teardown can proceed. */
+	if (fsdev_obj->delete_flag == true && fsdev_obj->mounted == true) {
+		return;
+	}
+
 	pthread_mutex_lock(&fsdev_obj->exit_mutex);
 	fsdev_obj->exit_num++;
 	if (fsdev_obj->exit_num < fsdev_obj->num_queues) {
@@ -1372,7 +1384,16 @@ ssam_fs_session_loop(void *arg)
 		}
 		ssam_fuse_share_memory(fsmsession);
 		if (res > 0) {
-			ssam_fuse_dispatcher_process(fsmsession);
+			if (fsdev_obj->delete_flag) {
+				/* force-delete in progress: the dispatcher and io_channel may
+				 * already be torn down, so complete this request without
+				 * touching them to avoid use-after-free. */
+				fsmsession->out_iov[0].iov_base = (void *)&fsmsession->iov_header;
+				fsmsession->out_iov[0].iov_len = sizeof(fsmsession->iov_header);
+				ssam_fs_fuse_req_done(fsmsession, -ENODEV);
+			} else {
+				ssam_fuse_dispatcher_process(fsmsession);
+			}
 			return SPDK_POLLER_BUSY;
 		} else {
 			return SPDK_POLLER_IDLE;
@@ -1659,6 +1680,8 @@ ssam_dev_io_scan_poller(void *pf_poller_ctx)
 	int polled_num = 0;
 	int tid = 0;
 	int opcode = 0;
+	int i = 0;
+	int processed = 0;
 	uint8_t func_id = ((struct spdk_ssam_dev_io_scan_poller_ctx *)pf_poller_ctx)->func_id;
 	bool restart_flag = ((struct spdk_ssam_dev_io_scan_poller_ctx *)pf_poller_ctx)->restart_flag;
 	int queue_id = ssam_get_queue_id(func_id);
@@ -1669,58 +1692,89 @@ ssam_dev_io_scan_poller(void *pf_poller_ctx)
 	ext.iov_base = buffer;
 	ext.iov_len = SSAM_FS_BUF_LEN;
 	struct iovec iov;
-	struct ssam_request *io_req[1] = { 0 };
+	struct ssam_request *io_req = NULL;
 	struct ssam_request_poll_opt poll_opt = {
 		.sge1_iov = &ext,
 		.queue_id = queue_id,
 	};
 	struct fuse_release_in *arg = (struct fuse_release_in *)buffer;
 	struct lo_dirp *d = NULL;
+	struct fuse_out_header nonfs_rsp = { 0 };
 	int fd;
+	int max_polls = (restart_flag == true) ? 1 : SSAM_MAX_REQ_POLL_SIZE;
 
-	pthread_mutex_lock(&g_ssam_fs_poller_ctx.poll_mutex[func_id]);
-	polled_num = ssam_request_poll_ext(tid, 1, io_req, &poll_opt);
-	pthread_mutex_unlock(&g_ssam_fs_poller_ctx.poll_mutex[func_id]);
-	if (io_req[0] != NULL && io_req[0]->type != SSAM_VIRTIO_FS_IO) {
-		SPDK_ERRLOG(" get illegal type, io_req[0]->type is %d, io_req[0]->gfunc_id is %d, io_req[0]->status is %d\n",
-			    io_req[0]->type, io_req[0]->gfunc_id, io_req[0]->status);
-		return SPDK_POLLER_IDLE;
-	}
-	if (polled_num <= 0) {
-		return SPDK_POLLER_IDLE;
-	}
-	opcode = ((struct fuse_in_header *)io_req[0]->req.cmd.header)->opcode;
-	struct fuse_out_header rsp = {
-		.len = sizeof(struct fuse_out_header),
-		.error = opcode != SSAM_FUSE_OPCODE_DESTROY ? -ENODEV : 0,
-		.unique = 0,
-	};
+	for (i = 0; i < max_polls; i++) {
+		io_req = NULL;
+		pthread_mutex_lock(&g_ssam_fs_poller_ctx.poll_mutex[func_id]);
+		polled_num = ssam_request_poll_ext(tid, 1, &io_req, &poll_opt);
+		pthread_mutex_unlock(&g_ssam_fs_poller_ctx.poll_mutex[func_id]);
+		if (io_req != NULL && io_req->type != SSAM_VIRTIO_FS_IO) {
+			SPDK_ERRLOG(" get illegal type, io_req[0]->type is %d, io_req[0]->gfunc_id is %d, io_req[0]->status is %d, complete it.\n",
+			    io_req->type, io_req->gfunc_id, io_req->status);
+			memset(&resp, 0, sizeof(resp));
+			resp.gfunc_id = io_req->gfunc_id;
+			resp.iocb_id = io_req->iocb_id;
+			resp.flr_seq = io_req->flr_seq;
+			resp.status = io_req->status;
+			resp.req = io_req;
+			virtio_res->iovs = NULL;
+			virtio_res->iovcnt = 0;
+			virtio_res->rsp = &nonfs_rsp;
+			virtio_res->rsp_len = 0;
+			ssam_io_complete(0, &resp);
+			processed++;
+			continue;
+		}
+		if (polled_num <= 0) {
+			break;
+		}
+		processed++;
+		opcode = ((struct fuse_in_header *)io_req->req.cmd.header)->opcode;
+		struct fuse_out_header rsp = {
+			.len = sizeof(struct fuse_out_header),
+			.error = opcode != SSAM_FUSE_OPCODE_DESTROY ? -ENODEV : 0,
+			.unique = 0,
+		};
 
-	if (restart_flag != true) {
-		if (opcode == SSAM_FUSE_OPCODE_RELEASE) {
-			fd = arg->fh;
-			close(fd);
-		} else if (opcode == SSAM_FUSE_OPCODE_RELEASEDIR) {
-			d = (struct lo_dirp *)(uintptr_t)arg->fh;
-			closedir(d->dp);
-			free(d);
+		if (restart_flag != true) {
+			if (opcode == SSAM_FUSE_OPCODE_RELEASE) {
+				fd = arg->fh;
+				close(fd);
+			} else if (opcode == SSAM_FUSE_OPCODE_RELEASEDIR) {
+				d = (struct lo_dirp *)(uintptr_t)arg->fh;
+				closedir(d->dp);
+				free(d);
+			}
+		}
+
+		memset(&resp, 0, sizeof(resp));
+		resp.gfunc_id = io_req->gfunc_id;
+		resp.iocb_id = io_req->iocb_id;
+		resp.flr_seq = io_req->flr_seq;
+		resp.status = io_req->status;
+		resp.req = io_req;
+
+		memcpy(&iov, &io_req->req.cmd.iovs[io_req->req.cmd.writable],
+			sizeof(io_req->req.cmd.iovs[io_req->req.cmd.writable]));
+		virtio_res->iovs = &iov;
+		virtio_res->iovcnt = 1;
+		virtio_res->rsp = &rsp;
+		virtio_res->rsp_len = sizeof(struct fuse_out_header);
+		ssam_io_complete(0, &resp);
+
+		if (restart_flag != true && opcode == SSAM_FUSE_OPCODE_DESTROY) {
+			SPDK_NOTICELOG("fs controller %u received FUSE_DESTROY during cleanup, closing channel.\n", func_id);
+			ssam_update_virtio_device_used(func_id, 0);
+			spdk_poller_unregister(&g_ssam_fs_poller_ctx.pf_poller[func_id]);
+			g_ssam_fs_poller_ctx.pf_poller[func_id] = NULL;
+			fsdev_map[func_id].mounted = false;
+			break;
 		}
 	}
 
-	memset(&resp, 0, sizeof(resp));
-	resp.gfunc_id = io_req[0]->gfunc_id;
-	resp.iocb_id = io_req[0]->iocb_id;
-	resp.flr_seq = io_req[0]->flr_seq;
-	resp.status = io_req[0]->status;
-	resp.req = io_req[0];
-
-	memcpy(&iov, &io_req[0]->req.cmd.iovs[io_req[0]->req.cmd.writable],
-	       sizeof(io_req[0]->req.cmd.iovs[io_req[0]->req.cmd.writable]));
-	virtio_res->iovs = &iov;
-	virtio_res->iovcnt = 1;
-	virtio_res->rsp = &rsp;
-	virtio_res->rsp_len = sizeof(struct fuse_out_header);
-	ssam_io_complete(0, &resp);
+	if (processed == 0) {
+		return SPDK_POLLER_IDLE;
+	}
 
 	return SPDK_POLLER_BUSY;
 }
@@ -1816,10 +1870,16 @@ ssam_fs_destory(char *name, bool force, void *request,
 
 			fsdev_map[i].rsp_ctx = request;
 			fsdev_map[i].rsp_fn = rpc_ssam_send_response_cb;
-			g_ssam_fs_poller_ctx.pf_poller_ctx[fsdev_map[i].gfunc_id].restart_flag = false;
-			g_ssam_fs_poller_ctx.pf_poller[fsdev_map[i].gfunc_id] = SPDK_POLLER_REGISTER(ssam_dev_io_scan_poller,
-				&g_ssam_fs_poller_ctx.pf_poller_ctx[fsdev_map[i].gfunc_id], 0);
-			ssam_update_virtio_device_used(fsdev_map[i].gfunc_id, 0);
+			if (fsdev_map[i].mounted) {
+				g_ssam_fs_poller_ctx.pf_poller_ctx[fsdev_map[i].gfunc_id].restart_flag = false;
+				g_ssam_fs_poller_ctx.pf_poller[fsdev_map[i].gfunc_id] = SPDK_POLLER_REGISTER(ssam_dev_io_scan_poller,
+					&g_ssam_fs_poller_ctx.pf_poller_ctx[fsdev_map[i].gfunc_id], 0);
+				fsdev_map[i].rsp_fn(fsdev_map[i].rsp_ctx, 0);
+				fsdev_map[i].rsp_fn = NULL;
+				fsdev_map[i].rsp_ctx = NULL;
+			} else {
+				ssam_update_virtio_device_used(fsdev_map[i].gfunc_id, 0);
+			}
 			ssam_fs_event_cb(&fsdev_map[i]);
 			return 0;
 		}
@@ -1837,7 +1897,9 @@ static int ssam_fs_flr_poller(void *flr_map)
 	for (i = 0; i < SSAM_HOSTEP_NUM_MAX; i++) {
 		if (fsdev_map[i].used == true && fsdev_map[i].flr_seq != *flr_map_p && fsdev_map[i].flr_seq != UINT32_MAX) {
 			if (fsdev_map[i].mounted) {
-				fsdev_destroy(ssam_to_fs_session(fsdev_map[i].smsession[0]));
+				if (fsdev_map[i].delete_flag == false && fsdev_map[i].smsession[0] != NULL) {
+					fsdev_destroy(ssam_to_fs_session(fsdev_map[i].smsession[0]));
+				}
 				fsdev_map[i].mounted = false;
 			}
 			fsdev_map[i].flr_seq = *flr_map_p;
