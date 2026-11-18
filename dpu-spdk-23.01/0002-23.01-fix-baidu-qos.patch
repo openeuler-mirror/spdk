@@ -1,0 +1,186 @@
+From 7713f6e2654d3a8cb10ccaf18b5c141c3ca5d35c Mon Sep 17 00:00:00 2001
+From: liuziming1224 <liuziming7@huawei.com>
+Date: Thu, 12 Nov 2026 10:23:59 +0800
+Subject: [PATCH] =?UTF-8?q?=E7=99=BE=E5=BA=A6qos=E5=B8=A6=E5=AE=BD?=
+ =?UTF-8?q?=E9=97=AE=E9=A2=98=E4=BF=AE=E5=A4=8D?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ lib/ssam/ssam.c          | 10 ++++++++--
+ lib/ssam/ssam_blk.c      | 26 ++++++++++++++++++++++++--
+ lib/ssam/ssam_internal.h |  3 +++
+ 3 files changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/lib/ssam/ssam.c b/lib/ssam/ssam.c
+index 929c5cd1c..902cad5de 100644
+--- a/lib/ssam/ssam.c
++++ b/lib/ssam/ssam.c
+@@ -34,6 +34,8 @@
+ #define DEVICE_READY_TIMEOUT        150
+ #define DEVICE_READY_WAIT_TIME      10000
+ 
++#define HANDLE_IO_WAIT_NUM_MAX 16
++
+ struct ssam_event_user_ctx {
+ 	bool session_freed;  /* true if session has been freed */
+ 	bool async_done;    /* true if session event done */
+@@ -666,6 +668,7 @@ ssam_init_session_fields(struct spdk_ssam_session_reg_info *info,
+ 	smsession->rsp_ctx = info->rsp_ctx;
+ 	smsession->max_queues = info->queues;
+ 	smsession->queue_size = SPDK_SSAM_DEFAULT_VQ_SIZE;
++	smsession->io_height_num = 0;
+ 	if (info->name == NULL) {
+ 		smsession->name = spdk_sprintf_alloc("%s_%s_%d", smdev->name, info->type_name, info->gfunc_id);
+ 	} else {
+@@ -805,12 +808,16 @@ ssam_io_queue_handle(struct spdk_ssam_dev *smdev)
+ {
+ 	uint64_t count = 0;
+ 	uint64_t io_wait_cnt = smdev->io_wait_cnt;
+-	while (count < io_wait_cnt) {
++	while (count < io_wait_cnt && count < HANDLE_IO_WAIT_NUM_MAX) {
+ 		struct spdk_ssam_session_io_wait *io_wait = TAILQ_FIRST(&smdev->io_wait_queue);
+ 		ssam_session_remove_io_wait(smdev, io_wait);
++		uint64_t cnt_before_call = smdev->io_wait_cnt;
+ 		if (io_wait->cb_fn != NULL) {
+ 			io_wait->cb_fn(io_wait->cb_arg);
+ 		}
++		if (smdev->io_wait_cnt > cnt_before_call) {
++			break;
++		}
+ 		count++;
+ 	}
+ }
+@@ -1042,7 +1049,6 @@ ssam_dev_request_worker(void *arg)
+ 	/* The I/O waiting due to insufficient memory needs to be processed first. */
+ 	if (spdk_unlikely(smdev->io_wait_cnt > 0)) {
+ 		ssam_io_queue_handle(smdev);
+-		return SPDK_POLLER_BUSY;
+ 	}
+ 
+ 	io_num = ssam_request_poll(smdev->tid, SSAM_MAX_REQ_POLL_SIZE, io_req);
+diff --git a/lib/ssam/ssam_blk.c b/lib/ssam/ssam_blk.c
+index af7d45ece..c086569c6 100644
+--- a/lib/ssam/ssam_blk.c
++++ b/lib/ssam/ssam_blk.c
+@@ -38,6 +38,9 @@
+ 
+ #define SSAM_IO_PROCESS_TIME_OUT    2
+ 
++/* The max num of smsession io for flight */
++#define SMSESSION_IO_HEIGHT_NUM_MAX 64
++
+ /* Minimal set of features supported by every virtio-blk device */
+ #define SPDK_SSAM_BLK_FEATURES_BASE (SPDK_SSAM_FEATURES | \
+         (1ULL << VIRTIO_BLK_F_SIZE_MAX) | (1ULL << VIRTIO_BLK_F_SEG_MAX) | \
+@@ -1421,6 +1424,7 @@ ssam_blk_req_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_ar
+ 		     task->io_req->req.cmd.virtio.req_idx,
+ 		     success);
+ 	task->bsmsession->bdev_count--;
++	task->bsmsession->smsession.io_height_num--;
+ 	task->bsmsession->blk_stat.bdev_complete_count++;
+ 	task->bsmsession->vq_blk_stat[task->vq_idx].bdev_complete_count++;
+ 	ssam_task_stat_tick(&task->task_stat.bdev_end_tsc);
+@@ -1435,7 +1439,9 @@ ssam_request_rc_process(int rc, struct spdk_ssam_blk_task *task)
+ 	if (rc == 0) {
+ 		return rc;
+ 	}
+-
++	
++	task->bsmsession->bdev_count--;
++	task->bsmsession->smsession.io_height_num--;
+ 	if (rc == -ENOMEM) {
+ 		SPDK_WARNLOG("No memory, start to queue io.\n");
+ 		ssam_request_queue_io(task);
+@@ -1487,6 +1493,7 @@ ssam_virtio_read_write_process(struct spdk_ssam_blk_task *task,
+ 
+ 	if (req->type == VIRTIO_BLK_T_IN) {
+ 		bsmsession->bdev_count++;
++		bsmsession->smsession.io_height_num++;
+ 		ssam_task_stat_tick(&task->task_stat.bdev_start_tsc);
+ 		rc = spdk_bdev_readv(bsmsession->bdev_desc, bsmsession->io_channel,
+ 				     task->iovs.virt.sges, task->iovcnt, req->sector * SECTOR_SIZE,
+@@ -1494,6 +1501,7 @@ ssam_virtio_read_write_process(struct spdk_ssam_blk_task *task,
+ 		ssam_task_stat_tick(&task->task_stat.bdev_func_tsc);
+ 	} else if (!bsmsession->readonly) {
+ 		bsmsession->bdev_count++;
++		bsmsession->smsession.io_height_num++;
+ 		ssam_task_stat_tick(&task->task_stat.bdev_start_tsc);
+ 		rc = spdk_bdev_writev(bsmsession->bdev_desc, bsmsession->io_channel,
+ 				      task->iovs.virt.sges, task->iovcnt, req->sector * SECTOR_SIZE,
+@@ -1503,7 +1511,8 @@ ssam_virtio_read_write_process(struct spdk_ssam_blk_task *task,
+ 		ssam_io_crc_check_log("write bdev submit", ssam_blk_io_crc_print, task);
+ 	} else {
+ 		SPDK_DEBUGLOG(ssam_blk, "Device is in read-only mode!\n");
+-		rc = -1;
++		ssam_task_complete(task, VIRTIO_BLK_S_IOERR);
++		return -1;
+ 	}
+ 
+ 	return ssam_request_rc_process(rc, task);
+@@ -1534,6 +1543,7 @@ ssam_virtio_discard_process(struct spdk_ssam_blk_task *task)
+ 		return -1;
+ 	}
+ 	bsmsession->bdev_count++;
++	bsmsession->smsession.io_height_num++;
+ 	rc = spdk_bdev_unmap(bsmsession->bdev_desc, bsmsession->io_channel,
+ 			     desc->sector * SECTOR_SIZE, desc->num_sectors * SECTOR_SIZE,
+ 			     ssam_blk_req_complete_cb, task);
+@@ -1565,6 +1575,7 @@ ssam_virtio_write_zeroes_process(struct spdk_ssam_blk_task *task)
+ 			     (uint64_t)desc->sector * SECTOR_SIZE, (uint64_t)desc->num_sectors * SECTOR_SIZE);
+ 	}
+ 	bsmsession->bdev_count++;
++	bsmsession->smsession.io_height_num++;
+ 	rc = spdk_bdev_write_zeroes(bsmsession->bdev_desc, bsmsession->io_channel,
+ 				    desc->sector * SECTOR_SIZE, desc->num_sectors * SECTOR_SIZE, ssam_blk_req_complete_cb, task);
+ 
+@@ -1600,6 +1611,7 @@ ssam_virtio_flush_process(struct spdk_ssam_blk_task *task,
+ 	}
+ 	flush_bytes = blockcnt * blocklen;
+ 	bsmsession->bdev_count++;
++	bsmsession->smsession.io_height_num++;
+ 	rc = spdk_bdev_flush(bsmsession->bdev_desc, bsmsession->io_channel,
+ 			     0, flush_bytes, ssam_blk_req_complete_cb, task);
+ 
+@@ -1958,6 +1970,11 @@ ssam_process_blk_task(struct spdk_ssam_session *smsession, struct ssam_request *
+ 	task->session_io_wait.cb_fn = ssam_session_io_resubmit;
+ 	task->session_io_wait.cb_arg = task;
+ 
++	if(smsession->io_height_num >= SMSESSION_IO_HEIGHT_NUM_MAX) {
++		ssam_session_insert_io_wait(smsession, &task->session_io_wait);
++		return;
++	}
++
+ 	rc = ssam_task_iovs_memory_get(task);
+ 	if (rc != 0) {
+ 		ssam_session_insert_io_wait(smsession, &task->session_io_wait);
+@@ -2278,6 +2295,11 @@ ssam_session_io_resubmit(void *arg)
+ 	struct spdk_ssam_session *smsession = &task->bsmsession->smsession;
+ 	int rc;
+ 
++	if (smsession->io_height_num >= SMSESSION_IO_HEIGHT_NUM_MAX) {
++		ssam_session_insert_io_wait(smsession, &task->session_io_wait);
++		return;
++	}
++
+ 	rc = ssam_task_iovs_memory_get(task);
+ 	if (rc != 0) {
+ 		ssam_session_insert_io_wait(smsession, &task->session_io_wait);
+diff --git a/lib/ssam/ssam_internal.h b/lib/ssam/ssam_internal.h
+index a1c1a2670..5837f09e3 100644
+--- a/lib/ssam/ssam_internal.h
++++ b/lib/ssam/ssam_internal.h
+@@ -154,6 +154,9 @@ struct spdk_ssam_session {
+ 	/* Number of processing tasks, can not remove session when task_cnt > 0 */
+ 	int task_cnt;
+ 
++	/* Number of smsession io for flight, water line is SMSESSION_IO_HEIGHT_NUM_MAX */
++	uint32_t io_height_num;
++
+ 	/* Number of pending asynchronous operations */
+ 	uint32_t pending_async_op_num;
+ 
+-- 
+2.28.0.windows.1
+
